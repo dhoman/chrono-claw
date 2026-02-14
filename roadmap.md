@@ -125,61 +125,51 @@ Relevant files:
 
 ### Phase 2: Trust-Tier Routing and Webhook Auth
 
-**Status**: Building blocks exist (multi-agent routing, per-agent tool policy, sandbox modes, DM session scoping, external content wrapping). Missing: formal trust-tier abstraction, generic webhook HMAC, and "reader agent" template.
+**Status**: DONE.
 
-**What already exists**:
+**What was delivered**:
 
-- 8-tier routing in `src/routing/resolve-route.ts` (peer → guild+roles → team → account → channel → default)
-- Per-agent tool policies (`agents.list[].tools.allow/deny`)
-- Per-agent sandbox config (`agents.list[].sandbox.mode/scope`)
-- DM session isolation (`session.dmScope`)
-- External content wrapping with prompt injection detection (`src/security/external-content.ts`)
-- Trusted proxy auth mode, gateway auth rate limiting
-- Webhook signatures for LINE (HMAC-SHA256), Plivo (V2/V3), Twilio
+**2a — Generic webhook HMAC/token verification module:**
 
-Goals:
+- `src/gateway/webhook-hmac.ts` — `verifyWebhookSignature()` supporting three types: `hmac-sha256` (GitHub-style `sha256=<hex>`), `hmac-sha1` (legacy `sha1=<hex>`), and `token` (GitLab-style constant-time comparison). Follows the existing LINE signature pattern (`crypto.createHmac` + `crypto.timingSafeEqual`). Supports configurable prefix stripping and hex/base64 encoding.
+- `src/gateway/webhook-hmac.test.ts` — 14 unit tests: valid/invalid signatures for all three types, missing/empty headers, truncated signatures, wrong prefix, base64 encoding variant.
 
-- Formalize trust-tier routing as a documented configuration pattern using existing primitives.
-- Add generic webhook signature verification (HMAC) for providers that don't have it yet.
-- Publish a "reader agent" configuration template for untrusted ingress.
+**2b — Config and schema updates:**
 
-Key actions:
+- `src/config/types.hooks.ts` — added `WebhookSignatureType`, `WebhookSignatureMapping`, and optional `webhookSignature` field to `HookMappingConfig`.
+- `src/config/zod-schema.hooks.ts` — added `webhookSignature` to `HookMappingSchema` with `secret` marked as `.register(sensitive)` to prevent leaking in config dumps/logs. (Note: the Zod schema uses `.strict()`, so both the TypeScript types and Zod schema must be updated together — types alone would cause config validation rejection.)
+- `src/gateway/hooks-mapping.ts` — added `webhookSignature` to `HookMappingResolved` type and propagated through `normalizeHookMapping` (header lowercased during normalization).
 
-1. Document a trust-tier configuration guide showing how to map ingress → agent → tool policy → sandbox using existing `bindings`, `agents.list[]`, and `tools.*` config. Include concrete examples for Tier A (operator), Tier B (verified webhook), Tier C (untrusted/public).
-2. Add a generic HMAC webhook signature verification middleware that can be configured per webhook path, covering GitHub (`X-Hub-Signature-256`), GitLab (`X-Gitlab-Token`), and generic HMAC providers.
-3. Create a "reader agent" example config: `sandbox=all`, `tools.allow=["read", "sessions_list", "sessions_history"]`, `tools.deny=["exec", "write", "browser", "nodes"]`, no elevated access.
-4. Add tests that verify unauthenticated webhooks are rejected and that reader-agent tool escalation is blocked.
+**2c — Gateway integration (per-mapping signature auth):**
 
-Deliverables:
+- `src/gateway/hooks.ts` — added `readRawAndJsonBody()` that captures the raw body string (for HMAC computation) and parses JSON separately, using the existing `readRequestBodyWithLimit` from `src/infra/http-body.ts`.
+- `src/gateway/server-http.ts` — restructured `createHooksRequestHandler` to support per-mapping webhook signature verification as an alternative to the global bearer token:
+  1. SubPath is extracted early (before auth) for pre-matching.
+  2. `findSignedMapping()` checks if any mapping with `webhookSignature` matches the subPath.
+  3. If found: reads raw body, verifies HMAC/token signature, skips global token check.
+  4. If not found: existing global token auth flow (unchanged).
+  5. Extracted `dispatchMappedHook()` helper to deduplicate mapping dispatch logic between both paths.
 
-1. Trust-tier configuration guide (doc or example config).
-2. Generic webhook HMAC middleware.
-3. Reader agent example config committed to `docs/` or `examples/`.
+**2d — Trust-tier documentation and reader agent:**
 
-Minimum viable test suite:
+- `docs/gateway/security/trust-tiers.md` — configuration guide documenting Tier A (Trusted Operators: gateway token, sandbox off, full tools), Tier B (Verified Systems: HMAC webhooks, sandbox all, coding tools), and Tier C (Untrusted/Public: channel auth, sandbox all, minimal read-only tools). Includes concrete config examples for each tier, per-webhook HMAC (GitHub) and token (GitLab) examples, the reader agent inline config, and a combined multi-tier deployment example.
 
-1. Unauthenticated webhook requests are rejected (401/403).
-2. Authenticated webhooks route to the correct agent.
-3. Reader agent cannot call `exec`, `write`, or `browser`.
+**2e — Tests:**
 
-Definition of done:
+- `test/security/trust-tier.test.ts` — 8 tests in two suites:
+  - Gateway-level (4 tests): unauthenticated webhook rejected (401), HMAC-authenticated webhook accepted (202), wrong signature rejected (401), missing signature header rejected (401).
+  - Tool-policy reader agent (4 tests): only `read`/`sessions_list`/`sessions_history` allowed; `exec`, `write`, `browser` each individually blocked.
+- `test/security/fixtures/webhook-payloads.ts` — added `GITHUB_SIGNED_SECRET`, `githubSignedWebhookBody`, `computeGitHubSignature()` helper, and `githubSignedWebhook` fixture.
 
-1. Every ingress path can be mapped to a trust tier via documented config.
-2. Generic webhook HMAC covers GitHub and GitLab.
-3. Reader agent config is tested and documented.
+**Verification**: All 24 new tests pass (14 HMAC unit + 8 trust-tier + 2 baseline audit). Full gateway suite (372 tests) passes with zero regressions. Build compiles cleanly.
 
 Relevant files:
 
-- src/routing/resolve-route.ts
-- src/routing/session-key.ts
-- src/agents/tool-policy.ts
-- src/agents/sandbox/constants.ts
-- src/security/external-content.ts
-- src/line/signature.ts (reference implementation)
-- extensions/voice-call/src/webhook-security.test.ts (reference tests)
-- docs/concepts/multi-agent.md
-- docs/gateway/security/index.md
-- docs/automation/webhook.md
+- src/gateway/webhook-hmac.ts, src/gateway/webhook-hmac.test.ts
+- src/config/types.hooks.ts, src/config/zod-schema.hooks.ts
+- src/gateway/hooks.ts, src/gateway/hooks-mapping.ts, src/gateway/server-http.ts
+- test/security/trust-tier.test.ts, test/security/fixtures/webhook-payloads.ts
+- docs/gateway/security/trust-tiers.md
 
 ### Phase 3: Supply-Chain and Hook Hardening
 
