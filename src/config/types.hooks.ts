@@ -8,6 +8,16 @@ export type HookMappingTransform = {
   export?: string;
 };
 
+export type WebhookSignatureType = "hmac-sha256" | "hmac-sha1" | "token";
+
+export type WebhookSignatureMapping = {
+  type: WebhookSignatureType;
+  header: string;
+  secret: string;
+  prefix?: string;
+  encoding?: "hex" | "base64";
+};
+
 export type HookMappingConfig = {
   id?: string;
   match?: HookMappingMatch;
@@ -39,6 +49,7 @@ export type HookMappingConfig = {
   thinking?: string;
   timeoutSeconds?: number;
   transform?: HookMappingTransform;
+  webhookSignature?: WebhookSignatureMapping;
 };
 
 export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";

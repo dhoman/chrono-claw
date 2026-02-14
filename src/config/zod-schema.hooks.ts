@@ -73,6 +73,16 @@ export const HookMappingSchema = z
       })
       .strict()
       .optional(),
+    webhookSignature: z
+      .object({
+        type: z.union([z.literal("hmac-sha256"), z.literal("hmac-sha1"), z.literal("token")]),
+        header: z.string(),
+        secret: z.string().register(sensitive),
+        prefix: z.string().optional(),
+        encoding: z.union([z.literal("hex"), z.literal("base64")]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

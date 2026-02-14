@@ -4,7 +4,12 @@ import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import {
+  readJsonBodyWithLimit,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+  isRequestBodyLimitError,
+} from "../infra/http-body.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
@@ -192,6 +197,37 @@ export async function readJsonBody(
     return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
   }
   return { ok: false, error: result.error };
+}
+
+export async function readRawAndJsonBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<{ ok: true; raw: string; value: unknown } | { ok: false; error: string }> {
+  let raw: string;
+  try {
+    raw = await readRequestBodyWithLimit(req, { maxBytes });
+  } catch (err: unknown) {
+    if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+      return { ok: false, error: "payload too large" };
+    }
+    if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+      return { ok: false, error: "request body timeout" };
+    }
+    if (isRequestBodyLimitError(err, "CONNECTION_CLOSED")) {
+      return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
+    }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: true, raw, value: {} };
+  }
+  try {
+    const value = JSON.parse(trimmed) as unknown;
+    return { ok: true, raw, value };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export function normalizeHookHeaders(req: IncomingMessage) {

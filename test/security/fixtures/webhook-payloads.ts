@@ -4,6 +4,8 @@
  * Each fixture provides: name, path, headers, body, and optional expectedStatus.
  */
 
+import crypto from "node:crypto";
+
 export type WebhookFixture = {
   name: string;
   path: string;
@@ -99,6 +101,40 @@ export const webhookWithSecret: WebhookFixture = {
     mode: "now",
   },
   expectedStatus: 200,
+};
+
+// ---------------------------------------------------------------------------
+// Signed webhook fixtures (for HMAC verification testing)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pre-computed HMAC-SHA256 signed fixture for GitHub-style webhook testing.
+ * The secret and signature are deterministic so tests can verify both
+ * acceptance (correct signature) and rejection (wrong signature).
+ */
+export const GITHUB_SIGNED_SECRET = "test-github-webhook-secret-32chars!!";
+
+export const githubSignedWebhookBody = {
+  action: "push",
+  ref: "refs/heads/main",
+  repository: { full_name: "test-org/test-repo" },
+  sender: { login: "test-user" },
+};
+
+/** Compute GitHub-style sha256= HMAC hex signature for the given body. */
+export function computeGitHubSignature(body: string, secret: string): string {
+  return `sha256=${crypto.createHmac("sha256", secret).update(body).digest("hex")}`;
+}
+
+export const githubSignedWebhook: WebhookFixture = {
+  name: "github-signed-push",
+  path: "/hooks/github",
+  headers: {
+    "X-GitHub-Event": "push",
+    "Content-Type": "application/json",
+  },
+  body: githubSignedWebhookBody,
+  expectedStatus: 202,
 };
 
 export const ALL_FIXTURES: WebhookFixture[] = [

@@ -1,7 +1,12 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import type { HookMessageChannel } from "./hooks.js";
+import {
+  CONFIG_PATH,
+  type HookMappingConfig,
+  type HooksConfig,
+  type WebhookSignatureMapping,
+} from "../config/config.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -22,6 +27,7 @@ export type HookMappingResolved = {
   thinking?: string;
   timeoutSeconds?: number;
   transform?: HookMappingTransformResolved;
+  webhookSignature?: WebhookSignatureMapping;
 };
 
 export type HookMappingTransformResolved = {
@@ -198,6 +204,16 @@ function normalizeHookMapping(
       }
     : undefined;
 
+  const webhookSignature = mapping.webhookSignature
+    ? {
+        type: mapping.webhookSignature.type,
+        header: mapping.webhookSignature.header.toLowerCase(),
+        secret: mapping.webhookSignature.secret,
+        prefix: mapping.webhookSignature.prefix,
+        encoding: mapping.webhookSignature.encoding,
+      }
+    : undefined;
+
   return {
     id,
     matchPath,
@@ -217,6 +233,7 @@ function normalizeHookMapping(
     thinking: mapping.thinking,
     timeoutSeconds: mapping.timeoutSeconds,
     transform,
+    webhookSignature,
   };
 }
 

@@ -32,7 +32,7 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
-import { applyHookMappings } from "./hooks-mapping.js";
+import { applyHookMappings, type HookMappingResolved } from "./hooks-mapping.js";
 import {
   extractHookToken,
   getHookAgentPolicyError,
@@ -44,6 +44,7 @@ import {
   normalizeHookHeaders,
   normalizeWakePayload,
   readJsonBody,
+  readRawAndJsonBody,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
   resolveHookChannel,
@@ -56,6 +57,7 @@ import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { verifyWebhookSignature } from "./webhook-hmac.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 type HookAuthFailure = { count: number; windowStartedAtMs: number };
@@ -283,6 +285,83 @@ export function createHooksRequestHandler(
       return true;
     }
 
+    // Extract subPath early so we can pre-match signed mappings before auth.
+    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
+
+    // Check if a mapping with per-webhook signature auth matches this subPath.
+    // Only custom mapping paths can use per-mapping auth; wake/agent use the global token.
+    const signedMapping =
+      subPath && subPath !== "wake" && subPath !== "agent"
+        ? findSignedMapping(hooksConfig.mappings, subPath)
+        : undefined;
+
+    if (signedMapping) {
+      // ── Per-mapping webhook signature verification path ──
+      if (req.method !== "POST") {
+        res.statusCode = 405;
+        res.setHeader("Allow", "POST");
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Method Not Allowed");
+        return true;
+      }
+
+      const rawBody = await readRawAndJsonBody(req, hooksConfig.maxBodyBytes);
+      if (!rawBody.ok) {
+        const status =
+          rawBody.error === "payload too large"
+            ? 413
+            : rawBody.error === "request body timeout"
+              ? 408
+              : 400;
+        sendJson(res, status, { ok: false, error: rawBody.error });
+        return true;
+      }
+
+      const sigHeaderValue =
+        typeof req.headers[signedMapping.webhookSignature!.header] === "string"
+          ? (req.headers[signedMapping.webhookSignature!.header] as string)
+          : undefined;
+
+      if (
+        !verifyWebhookSignature({
+          config: signedMapping.webhookSignature!,
+          headerValue: sigHeaderValue,
+          rawBody: rawBody.raw,
+        })
+      ) {
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Unauthorized");
+        return true;
+      }
+
+      const payload =
+        typeof rawBody.value === "object" && rawBody.value !== null ? rawBody.value : {};
+      const headers = normalizeHookHeaders(req);
+
+      try {
+        const mapped = await applyHookMappings([signedMapping], {
+          payload: payload as Record<string, unknown>,
+          headers,
+          url,
+          path: subPath,
+        });
+        if (mapped) {
+          return dispatchMappedHook(res, hooksConfig, mapped);
+        }
+      } catch (err) {
+        logHooks.warn(`hook mapping failed: ${String(err)}`);
+        sendJson(res, 500, { ok: false, error: "hook mapping failed" });
+        return true;
+      }
+
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Not Found");
+      return true;
+    }
+
+    // ── Global token auth path (existing behavior) ──
     const token = extractHookToken(req);
     const clientKey = resolveHookClientKey(req);
     if (!safeEqualSecret(token, hooksConfig.token)) {
@@ -311,7 +390,6 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
     if (!subPath) {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -382,57 +460,7 @@ export function createHooksRequestHandler(
           path: subPath,
         });
         if (mapped) {
-          if (!mapped.ok) {
-            sendJson(res, 400, { ok: false, error: mapped.error });
-            return true;
-          }
-          if (mapped.action === null) {
-            res.statusCode = 204;
-            res.end();
-            return true;
-          }
-          if (mapped.action.kind === "wake") {
-            dispatchWakeHook({
-              text: mapped.action.text,
-              mode: mapped.action.mode,
-            });
-            sendJson(res, 200, { ok: true, mode: mapped.action.mode });
-            return true;
-          }
-          const channel = resolveHookChannel(mapped.action.channel);
-          if (!channel) {
-            sendJson(res, 400, { ok: false, error: getHookChannelError() });
-            return true;
-          }
-          if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
-            sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
-            return true;
-          }
-          const sessionKey = resolveHookSessionKey({
-            hooksConfig,
-            source: "mapping",
-            sessionKey: mapped.action.sessionKey,
-          });
-          if (!sessionKey.ok) {
-            sendJson(res, 400, { ok: false, error: sessionKey.error });
-            return true;
-          }
-          const runId = dispatchAgentHook({
-            message: mapped.action.message,
-            name: mapped.action.name ?? "Hook",
-            agentId: resolveHookTargetAgentId(hooksConfig, mapped.action.agentId),
-            wakeMode: mapped.action.wakeMode,
-            sessionKey: sessionKey.value,
-            deliver: resolveHookDeliver(mapped.action.deliver),
-            channel,
-            to: mapped.action.to,
-            model: mapped.action.model,
-            thinking: mapped.action.thinking,
-            timeoutSeconds: mapped.action.timeoutSeconds,
-            allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
-          });
-          sendJson(res, 202, { ok: true, runId });
-          return true;
+          return dispatchMappedHook(res, hooksConfig, mapped);
         }
       } catch (err) {
         logHooks.warn(`hook mapping failed: ${String(err)}`);
@@ -446,6 +474,86 @@ export function createHooksRequestHandler(
     res.end("Not Found");
     return true;
   };
+
+  function findSignedMapping(
+    mappings: HookMappingResolved[],
+    subPath: string,
+  ): HookMappingResolved | undefined {
+    const normalized = subPath.replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!normalized) {
+      return undefined;
+    }
+    for (const mapping of mappings) {
+      if (mapping.webhookSignature && mapping.matchPath === normalized) {
+        return mapping;
+      }
+    }
+    return undefined;
+  }
+
+  function dispatchMappedHook(
+    res: ServerResponse,
+    hooksConfig: HooksConfigResolved,
+    mapped: Awaited<ReturnType<typeof applyHookMappings>>,
+  ): true {
+    if (!mapped) {
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Not Found");
+      return true;
+    }
+    if (!mapped.ok) {
+      sendJson(res, 400, { ok: false, error: mapped.error });
+      return true;
+    }
+    if (mapped.action === null) {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    }
+    if (mapped.action.kind === "wake") {
+      dispatchWakeHook({
+        text: mapped.action.text,
+        mode: mapped.action.mode,
+      });
+      sendJson(res, 200, { ok: true, mode: mapped.action.mode });
+      return true;
+    }
+    const channel = resolveHookChannel(mapped.action.channel);
+    if (!channel) {
+      sendJson(res, 400, { ok: false, error: getHookChannelError() });
+      return true;
+    }
+    if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
+      sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+      return true;
+    }
+    const sessionKey = resolveHookSessionKey({
+      hooksConfig,
+      source: "mapping",
+      sessionKey: mapped.action.sessionKey,
+    });
+    if (!sessionKey.ok) {
+      sendJson(res, 400, { ok: false, error: sessionKey.error });
+      return true;
+    }
+    const runId = dispatchAgentHook({
+      message: mapped.action.message,
+      name: mapped.action.name ?? "Hook",
+      agentId: resolveHookTargetAgentId(hooksConfig, mapped.action.agentId),
+      wakeMode: mapped.action.wakeMode,
+      sessionKey: sessionKey.value,
+      deliver: resolveHookDeliver(mapped.action.deliver),
+      channel,
+      to: mapped.action.to,
+      model: mapped.action.model,
+      thinking: mapped.action.thinking,
+      timeoutSeconds: mapped.action.timeoutSeconds,
+      allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
+    });
+    sendJson(res, 202, { ok: true, runId });
+    return true;
+  }
 }
 
 export function createGatewayHttpServer(opts: {
