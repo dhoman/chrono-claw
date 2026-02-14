@@ -96,6 +96,7 @@
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "release:check": "node --import tsx scripts/release-check.ts",
+    "scan:skills": "node --import tsx scripts/scan-skills.ts",
     "start": "node scripts/run-node.mjs",
     "test": "node scripts/test-parallel.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
@@ -211,6 +212,9 @@
   "engines": {
     "node": ">=22.12.0"
   },
+  "volta": {
+    "node": "22.12.0"
+  },
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
     "minimumReleaseAge": 2880,
@@ -236,8 +240,5 @@
       "protobufjs",
       "sharp"
     ]
-  },
-  "volta": {
-    "node": "22.12.0"
   }
 }
