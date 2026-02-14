@@ -168,6 +168,103 @@ describe("archive utils", () => {
     });
   });
 
+  it("rejects zip archives that exceed entry count limit", async () => {
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "bundle.zip");
+    const extractDir = path.join(workDir, "extract");
+
+    const zip = new JSZip();
+    // Create 5 entries but set maxEntries to 3
+    for (let i = 0; i < 5; i++) {
+      zip.file(`package/file-${i}.txt`, `content-${i}`);
+    }
+    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await expect(
+      extractArchive({
+        archivePath,
+        destDir: extractDir,
+        timeoutMs: 5_000,
+        limits: { maxEntries: 3 },
+      }),
+    ).rejects.toThrow("archive entry count exceeds limit");
+  });
+
+  it("rejects zip archives where a single entry exceeds maxEntryBytes", async () => {
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "bundle.zip");
+    const extractDir = path.join(workDir, "extract");
+
+    const zip = new JSZip();
+    zip.file("package/big.txt", "x".repeat(256));
+    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await expect(
+      extractArchive({
+        archivePath,
+        destDir: extractDir,
+        timeoutMs: 5_000,
+        limits: { maxEntryBytes: 64 },
+      }),
+    ).rejects.toThrow("archive entry extracted size exceeds limit");
+  });
+
+  it("rejects tar archives containing symlinks", async () => {
+    // Symlink creation may be unreliable on Windows CI
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "bundle.tar");
+    const extractDir = path.join(workDir, "extract");
+    const packageDir = path.join(workDir, "package");
+
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "real.txt"), "real");
+    await fs.symlink(path.join(packageDir, "real.txt"), path.join(packageDir, "link.txt"));
+
+    await tar.c({ cwd: workDir, file: archivePath, follow: false }, ["package"]);
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await expect(
+      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/link/i);
+  });
+
+  it("rejects zip entries with backslash traversal", async () => {
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "bundle.zip");
+    const extractDir = path.join(workDir, "extract");
+
+    const zip = new JSZip();
+    // Use backslash-based traversal: package\..\..\evil.txt
+    zip.file("package\\..\\..\\evil.txt", "pwnd");
+    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await expect(
+      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/(escapes destination|absolute)/i);
+  });
+
+  it("rejects zip entries with Windows drive paths", async () => {
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "bundle.zip");
+    const extractDir = path.join(workDir, "extract");
+
+    const zip = new JSZip();
+    zip.file("C:\\Windows\\evil.dll", "pwnd");
+    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await expect(
+      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/drive path/i);
+  });
+
   it("rejects tar entries with absolute extraction paths", async () => {
     const workDir = await makeTempDir();
     const archivePath = path.join(workDir, "bundle.tar");

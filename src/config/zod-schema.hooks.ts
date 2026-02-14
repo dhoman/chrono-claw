@@ -3,7 +3,7 @@ import { z } from "zod";
 import { InstallRecordShape } from "./zod-schema.installs.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-function isSafeRelativeModulePath(raw: string): boolean {
+export function isSafeRelativeModulePath(raw: string): boolean {
   const value = raw.trim();
   if (!value) {
     return false;

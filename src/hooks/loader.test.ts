@@ -227,6 +227,82 @@ describe("loader", () => {
       expect(count).toBe(1);
     });
 
+    it("should reject absolute module paths", async () => {
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            enabled: true,
+            handlers: [
+              {
+                event: "command:new",
+                module: "/etc/passwd",
+              },
+            ],
+          },
+        },
+      };
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+    });
+
+    it("should reject parent traversal", async () => {
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            enabled: true,
+            handlers: [
+              {
+                event: "command:new",
+                module: "../../outside.ts",
+              },
+            ],
+          },
+        },
+      };
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+    });
+
+    it("should reject empty module paths", async () => {
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            enabled: true,
+            handlers: [
+              {
+                event: "command:new",
+                module: "",
+              },
+            ],
+          },
+        },
+      };
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+    });
+
+    it("should reject modules that escape workspaceDir", async () => {
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            enabled: true,
+            handlers: [
+              {
+                event: "command:new",
+                module: "../../../tmp/evil.js",
+              },
+            ],
+          },
+        },
+      };
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+    });
+
     it("should actually call the loaded handler", async () => {
       // Create a handler that we can verify was called
       const handlerPath = path.join(tmpDir, "callable-handler.js");

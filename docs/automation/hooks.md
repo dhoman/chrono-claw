@@ -993,9 +993,22 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 - Better documentation
 - Consistent structure
 
+## Production: Version Pinning
+
+Hooks installed from npm use **exact version pinning**. The install record stores the resolved version at install time, preventing silent upgrades to potentially compromised versions.
+
+To update a hook:
+
+```bash
+openclaw hooks install <name>@<new-version>
+```
+
+For details on the security model including npm install hardening, archive extraction protections, and module loading restrictions, see [Hook Security Model](/gateway/security/hook-security-model).
+
 ## See Also
 
 - [CLI Reference: hooks](/cli/hooks)
 - [Bundled Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)
 - [Webhook Hooks](/automation/webhook)
 - [Configuration](/gateway/configuration#hooks)
+- [Hook Security Model](/gateway/security/hook-security-model)
