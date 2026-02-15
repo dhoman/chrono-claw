@@ -27,13 +27,6 @@ import {
   DIRECT_INJECTIONS,
   INDIRECT_INJECTIONS,
   POLYGLOT_INJECTIONS,
-  TOOL_CONFUSION_INJECTIONS,
-  EXFILTRATION_INJECTIONS,
-  SSRF_INJECTIONS,
-  API_INGRESS_INJECTIONS,
-  HOOK_INGRESS_INJECTIONS,
-  WEBCHAT_INGRESS_INJECTIONS,
-  CLI_INGRESS_INJECTIONS,
 } from "./injection-corpus/payloads.js";
 
 // ---------------------------------------------------------------------------
@@ -217,7 +210,7 @@ describe("injection corpus: tool policy enforcement", () => {
     ],
   };
 
-  const toolConfusionEntries = TOOL_CONFUSION_INJECTIONS.filter(
+  const toolConfusionEntries = ALL_INJECTION_PAYLOADS.filter(
     (e) => e.targetTools && e.targetTools.length > 0,
   );
 
@@ -270,7 +263,7 @@ describe("injection corpus: tool policy enforcement", () => {
 // ---------------------------------------------------------------------------
 
 describe("injection corpus: DLP redaction", () => {
-  const exfilEntries = EXFILTRATION_INJECTIONS.filter(
+  const exfilEntries = ALL_INJECTION_PAYLOADS.filter(
     (e) => e.embeddedSecrets && e.embeddedSecrets.length > 0,
   );
 
@@ -357,7 +350,9 @@ describe("injection corpus: SSRF blocking", () => {
   });
 
   describe("SSRF targets from corpus are blocked", () => {
-    const ssrfEntries = SSRF_INJECTIONS.filter((e) => e.ssrfTargets && e.ssrfTargets.length > 0);
+    const ssrfEntries = ALL_INJECTION_PAYLOADS.filter(
+      (e) => e.ssrfTargets && e.ssrfTargets.length > 0,
+    );
 
     it.each(ssrfEntries.map((e) => [e.id, e]))("%s: all SSRF targets are blocked", (_id, entry) => {
       for (const target of entry.ssrfTargets!) {
