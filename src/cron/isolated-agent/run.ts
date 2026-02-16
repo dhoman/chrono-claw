@@ -633,6 +633,16 @@ export async function runCronIsolatedAgentTurn(params: {
               ? [{ text: synthesizedText }]
               : [];
         if (payloadsForDelivery.length > 0) {
+          // Debug: log the outbound delivery when DEBUG_AGENT_PIPELINE is set
+          if (process.env.DEBUG_AGENT_PIPELINE) {
+            for (const p of payloadsForDelivery) {
+              const text = "text" in p && typeof p.text === "string" ? p.text : JSON.stringify(p);
+              console.log(
+                `[agent-pipeline] OUTBOUND DELIVERY: channel=${resolvedDelivery.channel} ` +
+                  `to=${resolvedDelivery.to} text=${text.slice(0, 500)}`,
+              );
+            }
+          }
           const deliveryResults = await deliverOutboundPayloads({
             cfg: cfgWithAgentDefaults,
             channel: resolvedDelivery.channel,

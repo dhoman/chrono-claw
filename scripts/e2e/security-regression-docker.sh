@@ -481,6 +481,7 @@ CBJSONEOF
       -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
       -e "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1" \
       -e "NODE_TLS_REJECT_UNAUTHORIZED=0" \
+      -e "DEBUG_AGENT_PIPELINE=1" \
       $CB_ENV_FLAGS \
       "$IMAGE_NAME" \
       bash -lc "
@@ -573,8 +574,8 @@ INNERCFGEOF
     # Health check gateway after tests + dump log for diagnostics
     if $RUNTIME exec "$GW_CB_NAME" bash -lc "true" 2>/dev/null; then
       echo "==> Closed-box gateway remained healthy (model: $CB_MODEL)"
-      echo "==> Closed-box gateway log tail:"
-      $RUNTIME exec "$GW_CB_NAME" bash -lc "tail -n 30 /tmp/gateway-cb-e2e.log" 2>/dev/null || true
+      echo "==> Closed-box gateway log (agent pipeline debug):"
+      $RUNTIME exec "$GW_CB_NAME" bash -lc "grep -E 'agent-pipeline|security|error|deliver' /tmp/gateway-cb-e2e.log" 2>/dev/null || true
     else
       echo "WARNING: Closed-box gateway may have exited (model: $CB_MODEL)"
       $RUNTIME logs "$GW_CB_NAME" 2>/dev/null || true

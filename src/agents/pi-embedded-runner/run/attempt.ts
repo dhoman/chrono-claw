@@ -1138,6 +1138,34 @@ export async function runEmbeddedAttempt(
           }
         }
 
+<<<<<<< HEAD
+=======
+        messagesSnapshot = activeSession.messages.slice();
+        sessionIdUsed = activeSession.sessionId;
+
+        // Debug: log the LLM response when DEBUG_AGENT_PIPELINE is set
+        if (process.env.DEBUG_AGENT_PIPELINE) {
+          const assistantMsgs = messagesSnapshot.filter(
+            (m) => "role" in m && m.role === "assistant",
+          );
+          const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
+          const responseText =
+            lastAssistant && "content" in lastAssistant
+              ? typeof lastAssistant.content === "string"
+                ? lastAssistant.content
+                : JSON.stringify(lastAssistant.content)
+              : undefined;
+          console.log(
+            `[agent-pipeline] LLM RESPONSE: session=${params.sessionId} ` +
+              `error=${promptError ? String(promptError).slice(0, 200) : "none"} ` +
+              `assistantMsgs=${assistantMsgs.length}`,
+          );
+          if (responseText) {
+            console.log(`[agent-pipeline] RESPONSE TEXT: ${responseText.slice(0, 500)}`);
+          }
+        }
+
+>>>>>>> 7babf98b4 (phase 5, still working on it)
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
           note: timedOutDuringCompaction
