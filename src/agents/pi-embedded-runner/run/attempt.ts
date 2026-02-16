@@ -1157,7 +1157,7 @@ export async function runEmbeddedAttempt(
               : undefined;
           console.log(
             `[agent-pipeline] LLM RESPONSE: session=${params.sessionId} ` +
-              `error=${promptError ? String(promptError).slice(0, 200) : "none"} ` +
+              `error=${promptError ? describeUnknownError(promptError).slice(0, 200) : "none"} ` +
               `assistantMsgs=${assistantMsgs.length}`,
           );
           if (responseText) {
