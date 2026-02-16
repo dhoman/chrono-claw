@@ -78,6 +78,7 @@ type SourceRule = {
 };
 
 const LINE_RULES: LineRule[] = [
+  // --- Original rules ---
   {
     ruleId: "dangerous-exec",
     severity: "critical",
@@ -103,11 +104,66 @@ const LINE_RULES: LineRule[] = [
     message: "WebSocket connection to non-standard port",
     pattern: /new\s+WebSocket\s*\(\s*["']wss?:\/\/[^"']*:(\d+)/,
   },
+
+  // --- Phase 7: Evasion pattern rules ---
+  {
+    ruleId: "dynamic-import",
+    severity: "warn",
+    message: "Dynamic import() can load arbitrary modules at runtime",
+    pattern: /\bimport\s*\(/,
+  },
+  {
+    ruleId: "function-constructor-evasion",
+    severity: "critical",
+    message:
+      "Function constructor evasion detected (aliasing, bracket notation, or Reflect.construct)",
+    // Catches: Function() without new, globalThis["Function"], Reflect.construct(Function, ...),
+    // and aliasing like `const F = Function;`
+    pattern:
+      /(?<!new\s)(?<!\w)Function\s*\(|globalThis\s*\[\s*["']Function["']\]|Reflect\.construct\s*\(\s*Function\b|[=:]\s*Function\s*[;,)}\]]/,
+  },
+  {
+    ruleId: "computed-require",
+    severity: "critical",
+    message: "require() with computed or concatenated argument detected",
+    // Catches: require(variable), require("child" + "_process"), require(`${x}`)
+    pattern: /\brequire\s*\(\s*[a-zA-Z_$]|\brequire\s*\([^)]*\+/,
+  },
+  {
+    ruleId: "bracket-notation-dangerous",
+    severity: "critical",
+    message: "Bracket notation access to dangerous property (process['env'], global['eval'], etc.)",
+    pattern:
+      /process\s*\[\s*["']env["']\]|global(?:This)?\s*\[\s*["'](?:eval|Function|require|exec)["']\]/,
+  },
+  {
+    ruleId: "vm-code-execution",
+    severity: "critical",
+    message: "Node.js vm module code execution detected",
+    pattern:
+      /\bvm\s*\.\s*(?:runInNewContext|runInThisContext|compileFunction|createContext)\b|\bnew\s+vm\s*\.\s*Script\b/,
+    requiresContext: /require\s*\(\s*["'](?:node:)?vm["']\)|from\s+["'](?:node:)?vm["']/,
+  },
+  {
+    ruleId: "indirect-eval",
+    severity: "critical",
+    message: "Indirect eval() invocation detected",
+    // Catches: (0,eval)("code"), globalThis.eval(...), global.eval(...), window.eval(...)
+    pattern: /\(\s*0\s*,\s*eval\s*\)|(?:window|globalThis|global)\s*\.\s*eval\s*\(/,
+  },
+  {
+    ruleId: "shell-script-execution",
+    severity: "warn",
+    message: "Shell script reference combined with execution capability",
+    pattern: /["']\s*(?:\.\/|\.\.\/|\/)[^\s"']*\.sh\s*["']/,
+    requiresContext: /child_process|exec|spawn|execSync/,
+  },
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
 
 const SOURCE_RULES: SourceRule[] = [
+  // --- Original rules ---
   {
     ruleId: "potential-exfiltration",
     severity: "warn",
@@ -134,6 +190,35 @@ const SOURCE_RULES: SourceRule[] = [
       "Environment variable access combined with network send — possible credential harvesting",
     pattern: /process\.env/,
     requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+  },
+
+  // --- Phase 7: Evasion pattern rules ---
+  {
+    ruleId: "bracket-env-harvesting",
+    severity: "critical",
+    message:
+      "Bracket notation process['env'] combined with network send — credential harvesting evasion",
+    pattern: /process\s*\[\s*["']env["']\]/,
+    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+  },
+  {
+    ruleId: "base64-code-execution",
+    severity: "critical",
+    message: "Base64 decode combined with code execution — possible obfuscated payload",
+    pattern: /(?:atob|Buffer\.from)\s*\(/,
+    requiresContext: /\beval\s*\(|(?<!\w)Function\s*\(/,
+  },
+  {
+    ruleId: "obfuscated-code",
+    severity: "warn",
+    message: "Unicode escape sequence cluster detected (possible identifier obfuscation)",
+    pattern: /(\\u[0-9a-fA-F]{4}){4,}/,
+  },
+  {
+    ruleId: "template-literal-injection",
+    severity: "warn",
+    message: "Template literal with interpolation in require/import — possible evasion",
+    pattern: /(?:require|import)\s*\(\s*`[^`]*\$\{/,
   },
 ];
 

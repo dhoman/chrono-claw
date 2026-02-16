@@ -485,7 +485,7 @@ Relevant files:
 
 ### Phase 7: Skill Scanner Hardening
 
-**Status**: NOT STARTED.
+**Status**: DONE.
 
 **Priority**: HIGH. The current scanner uses static regex matching that is trivially bypassable by standard supply-chain attack patterns (e.g., event-stream, ua-parser-js style).
 
@@ -494,57 +494,57 @@ Goals:
 - Catch real supply-chain threats, not just toy patterns.
 - Expand CI test coverage to validate all rules and known evasion techniques.
 
-Key actions:
+**What was delivered**:
 
-**7a — Add detection rules for known evasion patterns:**
+**7a — 11 new detection rules for evasion patterns:**
 
-- Dynamic `import()`: `await import("child_process")` evades every existing rule.
-- `Function` constructor aliasing: `const F = Function; F("code")()`, `globalThis["Function"]("code")()`, `Reflect.construct(Function, ["code"])`.
-- Computed `require()`: `require("child" + "_process")`, `require(variable)`.
-- Bracket notation: `process["env"]`, `global["eval"]`.
-- String concatenation: `"ev"+"al"`, template literals with embedded calls.
-- `vm` module: `vm.runInNewContext`, `vm.Script`, `vm.compileFunction`.
-- Non-JS execution: `.sh` files with executable permissions, `postinstall` in `package.json`.
+Added 7 new LINE_RULES and 4 new SOURCE_RULES to `src/security/skill-scanner.ts`, bringing the total from 8 to 19 rules:
 
-**7b — Consider AST-based analysis:**
+- `dynamic-import` (LINE, warn): Catches `import()` expressions (dynamic module loading at runtime).
+- `function-constructor-evasion` (LINE, critical): Catches `Function()` without `new`, `globalThis["Function"]`, `Reflect.construct(Function, ...)`, and `= Function;` aliasing. Uses negative lookbehind to avoid double-flagging `new Function()` (already caught by `dynamic-code-execution`).
+- `computed-require` (LINE, critical): Catches `require(variable)` and `require("child" + "_process")` — any `require()` with non-literal or concatenated arguments.
+- `bracket-notation-dangerous` (LINE, critical): Catches `process["env"]`, `global["eval"]`, `globalThis["Function"]`, `globalThis["require"]`, `global["exec"]` — bracket notation access to dangerous properties.
+- `vm-code-execution` (LINE, critical): Catches `vm.runInNewContext`, `vm.runInThisContext`, `vm.compileFunction`, `vm.createContext`, `new vm.Script` — requires `require("vm")` or `from "node:vm"` context.
+- `indirect-eval` (LINE, critical): Catches `(0, eval)("code")`, `globalThis.eval(...)`, `global.eval(...)`, `window.eval(...)`.
+- `shell-script-execution` (LINE, warn): Catches `.sh` file references in string literals — requires `child_process`/`exec`/`spawn` context.
+- `bracket-env-harvesting` (SOURCE, critical): Catches `process["env"]` combined with `fetch`/`post`/`http.request` — bracket notation variant of the existing `env-harvesting` rule.
+- `base64-code-execution` (SOURCE, critical): Catches `atob()`/`Buffer.from()` combined with `eval()`/`Function()` — obfuscated payload execution.
+- `obfuscated-code` / unicode escapes (SOURCE, warn): Catches clusters of 4+ `\uXXXX` escape sequences — possible identifier obfuscation.
+- `template-literal-injection` (SOURCE, warn): Catches `require(\`${...}\`)` and `import(\`${...}\`)` — template literals with interpolation in module loading.
 
-Regex-only scanning has a fundamental ceiling. Evaluate using a lightweight AST parser (e.g., `acorn` or TypeScript compiler API) to detect:
+**7b — AST-based scanning evaluation (CONDITIONAL GO):**
 
-- Dynamic imports with non-literal arguments.
-- Computed property access on dangerous globals.
-- Indirect calls through variable aliasing.
-  This is a larger lift but dramatically raises the bar for evasion.
+- `docs/gateway/security/ast-scanner-evaluation.md` — evaluates 6 candidate parsers (acorn, @babel/parser, TypeScript compiler, tree-sitter, oxc-parser), recommends acorn + ts-blank-space as the smallest-footprint option.
+- Decision: CONDITIONAL GO — implement AST as an optional `--deep-scan` second pass when regex rules start producing unacceptable false-positive rates or when a real-world bypass is discovered that regex cannot address.
+- Identified 3 high-value AST detections (non-literal import/require args, computed dangerous property access, Function constructor through any call path) with ~320 lines estimated implementation cost.
 
-**7c — Expand CI test coverage:**
+**7c — 60 comprehensive scanner CI tests:**
 
-Current: 5 tests covering 2 of 8 rules. Target: 25+ tests covering all rules plus evasion attempts. Add negative tests: known bypass patterns that SHOULD be caught, payloads that currently evade detection.
+Rewrote `test/security/skill-scanner-ci.test.ts` (from 5 tests to 60 tests):
 
-Deliverables:
+- **Original rules** (16 tests): 2+ tests per original rule including negative cases — `dangerous-exec` (3), `dynamic-code-execution` (3), `crypto-mining` (2), `suspicious-network` (2), `potential-exfiltration` (2), `obfuscated-code` (2), `env-harvesting` (2).
+- **Evasion rules** (33 tests): 2+ tests per new rule including negative cases — `dynamic-import` (3), `function-constructor-evasion` (6), `computed-require` (3), `bracket-notation-dangerous` (4), `vm-code-execution` (4), `indirect-eval` (3), `shell-script-execution` (2), `bracket-env-harvesting` (2), `base64-code-execution` (3), `unicode-escape-evasion` (2), `template-literal-injection` (2).
+- **Combined evasion scenarios** (3 tests): event-stream style attack, ua-parser-js style attack, multi-layer evasion.
+- **False positive prevention** (4 tests): clean module, normal require, normal function definitions, standard WebSocket ports.
+- **Integration tests** (3 tests): `scanDirectoryWithSummary` with clean dir, malicious skill, empty dir.
 
-1. At minimum 10 new scanner rules for evasion patterns.
-2. Evaluation document for AST-based scanning (go/no-go decision).
-3. 25+ scanner CI tests covering all rules and known bypasses.
+Tests call `scanSource()` directly for fast execution (no temp files needed for unit tests), with `scanDirectoryWithSummary()` integration tests for key scenarios.
 
-Minimum viable test suite:
+**Verification**: All 60 scanner tests pass. All 194 security unit tests pass with zero regressions. `pnpm scan:skills` exits 0 on the real `skills/` directory (no false positives from new rules).
 
-1. `await import("child_process")` detected.
-2. `Function` aliasing detected.
-3. `process["env"]` detected.
-4. `require(variable)` detected.
-5. String concatenation evasion detected.
-6. All 8 original rules have at least 2 tests each.
+**Known weaknesses:**
 
-Definition of done:
-
-1. All known evasion patterns from the audit are detected or documented as accepted risk with mitigation.
-2. Scanner CI tests cover all rules with both positive and negative cases.
-3. If AST approach approved, initial implementation for top 3 evasion patterns.
+- **Multi-hop variable aliasing undetectable**: `const a = require; const b = a; b("child_process")` evades `computed-require` because `b(` is not `require(`. This is a fundamental regex limitation — documented as accepted risk. AST analysis (Phase 10+) can address this.
+- **Cross-file data flow not tracked**: Module A exports a dangerous function, Module B calls it normally. Regex operates per-file. Would require a module graph analysis.
+- **package.json lifecycle scripts not scanned**: `postinstall` scripts in `package.json` are a known supply-chain vector but the scanner only processes JS/TS files. Adding JSON parsing is a future enhancement.
+- **Minified/bundled code**: Variable renaming in bundler output makes pattern matching unreliable. Skills should be scanned pre-bundle.
 
 Relevant files:
 
-- src/security/skill-scanner.ts
-- test/security/skill-scanner-ci.test.ts
-- scripts/scan-skills.ts
+- src/security/skill-scanner.ts (19 rules: 11 LINE + 8 SOURCE)
+- test/security/skill-scanner-ci.test.ts (60 tests)
+- docs/gateway/security/ast-scanner-evaluation.md
+- scripts/scan-skills.ts (unchanged)
 
 ### Phase 8: Monitoring, Drift Detection, and Baseline Hardening
 
