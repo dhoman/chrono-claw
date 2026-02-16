@@ -43,7 +43,7 @@ function redactMediaUrl(url: string): string {
     const parsed = new URL(url);
     const params = parsed.searchParams;
     let changed = false;
-    for (const [key, value] of [...params.entries()]) {
+    for (const [key, value] of params.entries()) {
       const redacted = redactSensitiveText(value);
       if (redacted !== value) {
         params.set(key, redacted);
