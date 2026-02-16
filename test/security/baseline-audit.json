@@ -4,10 +4,16 @@
     "warn": 1,
     "info": 1
   },
-  "findingIds": ["gateway.trusted_proxies_missing", "summary.attack_surface"],
-  "findingsBySeverity": {
-    "critical": [],
-    "warn": ["gateway.trusted_proxies_missing"],
-    "info": ["summary.attack_surface"]
-  }
+  "findings": [
+    {
+      "checkId": "gateway.trusted_proxies_missing",
+      "severity": "warn",
+      "title": "Reverse proxy headers are not trusted"
+    },
+    {
+      "checkId": "summary.attack_surface",
+      "severity": "info",
+      "title": "Attack surface summary"
+    }
+  ]
 }

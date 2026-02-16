@@ -1,0 +1,21 @@
+{
+  "minimal": ["session_status"],
+  "coding": [
+    "apply_patch",
+    "edit",
+    "exec",
+    "image",
+    "memory_get",
+    "memory_search",
+    "process",
+    "read",
+    "session_status",
+    "sessions_history",
+    "sessions_list",
+    "sessions_send",
+    "sessions_spawn",
+    "write"
+  ],
+  "messaging": ["message", "session_status", "sessions_history", "sessions_list", "sessions_send"],
+  "full": []
+}

@@ -548,7 +548,7 @@ Relevant files:
 
 ### Phase 8: Monitoring, Drift Detection, and Baseline Hardening
 
-**Status**: NOT STARTED.
+**Status**: DONE.
 
 **Priority**: MEDIUM. Important for ongoing regression prevention, but less urgent than fixing active bypass paths (Phase 6) and scanner bypasses (Phase 7).
 
@@ -605,13 +605,14 @@ Definition of done:
 
 Relevant files:
 
-- test/security/baseline-audit.test.ts, test/security/baseline-audit.json
-- src/cli/security-cli.ts
-- src/agents/tool-policy-pipeline.ts
-- src/agents/tool-policy.ts
-- src/logging/redact.ts
-- docs/gateway/security/index.md
-- docs/gateway/logging.md
+- test/security/baseline-audit.test.ts, test/security/baseline-audit.json (hardened — 8a)
+- test/security/policy-drift.test.ts, test/security/policy-drift-snapshot.json (new — 8c)
+- src/security/security-events.ts, src/security/security-events.test.ts (new — 8d)
+- src/agents/tool-policy-pipeline.ts (modified — tool denial logging)
+- src/infra/net/fetch-guard.ts (modified — structured SSRF logging)
+- src/cron/isolated-agent/run.ts (modified — structured injection logging)
+- .github/workflows/ci.yml (modified — security-drift job)
+- docs/gateway/security/alerting.md (new — 8e)
 
 ### Phase 9: Test Depth — Make Existing Tests Actually Test Security
 

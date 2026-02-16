@@ -1,5 +1,6 @@
-import { filterToolsByPolicy } from "./pi-tools.policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { emitToolDenied } from "../security/security-events.js";
+import { filterToolsByPolicy } from "./pi-tools.policy.js";
 import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
@@ -104,5 +105,15 @@ export function applyToolPolicyPipeline(params: {
     const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
   }
+
+  // Emit structured events for denied tools
+  const allowedNames = new Set(filtered.map((t) => normalizeToolName(t.name)));
+  for (const tool of params.tools) {
+    const name = normalizeToolName(tool.name);
+    if (!allowedNames.has(name)) {
+      emitToolDenied({ tool: name, reason: "policy-pipeline" });
+    }
+  }
+
   return filtered;
 }

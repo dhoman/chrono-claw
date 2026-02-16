@@ -317,6 +317,22 @@ jobs:
       - name: Scan skills and extensions
         run: pnpm scan:skills
 
+  security-drift:
+    needs: [docs-scope, check]
+    if: needs.docs-scope.outputs.docs_only != 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      CI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+      - name: Run security drift tests
+        run: pnpm vitest run test/security/baseline-audit.test.ts test/security/policy-drift.test.ts
+
   checks-windows:
     needs: [docs-scope, changed-scope, build-artifacts, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')

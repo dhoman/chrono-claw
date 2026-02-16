@@ -53,6 +53,7 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
+import { emitInjectionDetected } from "../../security/security-events.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
@@ -382,10 +383,11 @@ export async function runCronIsolatedAgentTurn(params: {
     // Log suspicious patterns for security monitoring
     const suspiciousPatterns = detectSuspiciousPatterns(params.message);
     if (suspiciousPatterns.length > 0) {
-      logWarn(
-        `[security] Suspicious patterns detected in external hook content ` +
-          `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
-      );
+      emitInjectionDetected({
+        patterns: suspiciousPatterns,
+        session: baseSessionKey,
+        source: getHookType(baseSessionKey),
+      });
     }
   }
 

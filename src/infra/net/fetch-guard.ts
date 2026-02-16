@@ -1,5 +1,5 @@
 import type { Dispatcher } from "undici";
-import { logWarn } from "../../logger.js";
+import { emitSsrfBlocked } from "../../security/security-events.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import {
   closeDispatcher,
@@ -185,10 +185,11 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       };
     } catch (err) {
       if (err instanceof SsrFBlockedError) {
-        const context = params.auditContext ?? "url-fetch";
-        logWarn(
-          `security: blocked URL fetch (${context}) target=${parsedUrl.origin}${parsedUrl.pathname} reason=${err.message}`,
-        );
+        emitSsrfBlocked({
+          target: `${parsedUrl.origin}${parsedUrl.pathname}`,
+          reason: err.message,
+          auditContext: params.auditContext,
+        });
       }
       await release(dispatcher);
       throw err;
