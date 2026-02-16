@@ -4,6 +4,7 @@ import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
 import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
+import { redactOutboundPayload } from "../infra/outbound/payloads.js";
 
 export type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
@@ -48,7 +49,8 @@ export async function deliverLineAutoReply(params: {
   textLimit: number;
   deps: LineAutoReplyDeps;
 }): Promise<{ replyTokenUsed: boolean }> {
-  const { payload, lineData, replyToken, accountId, to, textLimit, deps } = params;
+  const payload = redactOutboundPayload(params.payload);
+  const { lineData, replyToken, accountId, to, textLimit, deps } = params;
   let replyTokenUsed = params.replyTokenUsed;
 
   const pushLineMessages = async (messages: messagingApi.Message[]): Promise<void> => {

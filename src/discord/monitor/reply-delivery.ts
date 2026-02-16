@@ -2,8 +2,9 @@ import type { RequestClient } from "@buape/carbon";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
-import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { redactOutboundPayload } from "../../infra/outbound/payloads.js";
+import { convertMarkdownTables } from "../../markdown/tables.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
 
@@ -21,7 +22,7 @@ export async function deliverDiscordReply(params: {
   chunkMode?: ChunkMode;
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
-  for (const payload of params.replies) {
+  for (const payload of params.replies.map(redactOutboundPayload)) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";

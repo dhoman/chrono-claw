@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
@@ -193,11 +194,17 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
   }
+  let release: (() => Promise<void>) | undefined;
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
-    const response = await fetch(`${apiBase}/api/tags`, {
-      signal: AbortSignal.timeout(5000),
+    const guarded = await fetchWithSsrFGuard({
+      url: `${apiBase}/api/tags`,
+      timeoutMs: 5000,
+      policy: { allowPrivateNetwork: true },
+      auditContext: "ollama-discovery",
     });
+    release = guarded.release;
+    const response = guarded.response;
     if (!response.ok) {
       console.warn(`Failed to discover Ollama models: ${response.status}`);
       return [];
@@ -224,6 +231,8 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
     return [];
+  } finally {
+    await release?.();
   }
 }
 
@@ -239,12 +248,20 @@ async function discoverVllmModels(
   const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
   const url = `${trimmedBaseUrl}/models`;
 
+  let release: (() => Promise<void>) | undefined;
   try {
     const trimmedApiKey = apiKey?.trim();
-    const response = await fetch(url, {
-      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      signal: AbortSignal.timeout(5000),
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      init: {
+        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      },
+      timeoutMs: 5000,
+      policy: { allowPrivateNetwork: true },
+      auditContext: "vllm-discovery",
     });
+    release = guarded.release;
+    const response = guarded.response;
     if (!response.ok) {
       console.warn(`Failed to discover vLLM models: ${response.status}`);
       return [];
@@ -277,6 +294,8 @@ async function discoverVllmModels(
   } catch (error) {
     console.warn(`Failed to discover vLLM models: ${String(error)}`);
     return [];
+  } finally {
+    await release?.();
   }
 }
 

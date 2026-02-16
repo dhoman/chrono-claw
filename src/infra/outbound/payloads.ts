@@ -38,6 +38,58 @@ function mergeMediaUrls(...lists: Array<Array<string | undefined> | undefined>):
   return merged;
 }
 
+function redactMediaUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const params = parsed.searchParams;
+    let changed = false;
+    for (const [key, value] of [...params.entries()]) {
+      const redacted = redactSensitiveText(value);
+      if (redacted !== value) {
+        params.set(key, redacted);
+        changed = true;
+      }
+    }
+    return changed ? parsed.toString() : url;
+  } catch {
+    return redactSensitiveText(url);
+  }
+}
+
+function redactChannelDataStrings(data: unknown): unknown {
+  if (typeof data === "string") {
+    return redactSensitiveText(data);
+  }
+  if (Array.isArray(data)) {
+    return data.map(redactChannelDataStrings);
+  }
+  if (data !== null && typeof data === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      result[key] = redactChannelDataStrings(value);
+    }
+    return result;
+  }
+  return data;
+}
+
+export function redactOutboundPayload(payload: ReplyPayload): ReplyPayload {
+  const next: ReplyPayload = { ...payload };
+  if (next.text) {
+    next.text = redactSensitiveText(next.text);
+  }
+  if (next.mediaUrl) {
+    next.mediaUrl = redactMediaUrl(next.mediaUrl);
+  }
+  if (next.mediaUrls) {
+    next.mediaUrls = next.mediaUrls.map(redactMediaUrl);
+  }
+  if (next.channelData) {
+    next.channelData = redactChannelDataStrings(next.channelData) as Record<string, unknown>;
+  }
+  return next;
+}
+
 export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.flatMap((payload) => {
     const parsed = parseReplyDirectives(payload.text ?? "");
@@ -52,13 +104,16 @@ export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): Rep
     const next: ReplyPayload = {
       ...payload,
       text: parsed.text ? redactSensitiveText(parsed.text) : "",
-      mediaUrls: mergedMedia.length ? mergedMedia : undefined,
-      mediaUrl: resolvedMediaUrl,
+      mediaUrls: mergedMedia.length ? mergedMedia.map(redactMediaUrl) : undefined,
+      mediaUrl: resolvedMediaUrl ? redactMediaUrl(resolvedMediaUrl) : resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,
       replyToTag: payload.replyToTag || parsed.replyToTag,
       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     };
+    if (next.channelData) {
+      next.channelData = redactChannelDataStrings(next.channelData) as Record<string, unknown>;
+    }
     if (parsed.isSilent && mergedMedia.length === 0) {
       return [];
     }

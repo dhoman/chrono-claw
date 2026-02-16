@@ -6,6 +6,7 @@ import type { MarkdownTableMode } from "../../config/types.base.js";
 import { danger, logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
+import { redactOutboundPayload } from "../../infra/outbound/payloads.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
@@ -93,7 +94,7 @@ export async function deliverReplies(params: {
     }
     return chunks;
   };
-  for (const reply of replies) {
+  for (const reply of replies.map(redactOutboundPayload)) {
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {

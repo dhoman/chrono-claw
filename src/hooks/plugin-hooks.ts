@@ -13,11 +13,20 @@ export type PluginHookLoadResult = {
   errors: string[];
 };
 
-function resolveHookDir(api: OpenClawPluginApi, dir: string): string {
-  if (path.isAbsolute(dir)) {
-    return dir;
+export function isContainedPath(baseDir: string, target: string): boolean {
+  const relative = path.relative(baseDir, target);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+export function resolveHookDir(api: OpenClawPluginApi, dir: string): string {
+  const pluginBaseDir = path.resolve(path.dirname(api.source));
+  const resolved = path.isAbsolute(dir) ? path.resolve(dir) : path.resolve(pluginBaseDir, dir);
+  if (!isContainedPath(pluginBaseDir, resolved) && resolved !== pluginBaseDir) {
+    throw new Error(
+      `Hook directory must be within the plugin directory: ${dir} resolves outside ${pluginBaseDir}`,
+    );
   }
-  return path.resolve(path.dirname(api.source), dir);
+  return resolved;
 }
 
 function normalizePluginHookEntry(api: OpenClawPluginApi, entry: HookEntry): HookEntry {
@@ -41,7 +50,15 @@ async function loadHookHandler(
   api: OpenClawPluginApi,
 ): Promise<InternalHookHandler | null> {
   try {
-    const url = pathToFileURL(entry.hook.handlerPath).href;
+    const pluginBaseDir = path.resolve(path.dirname(api.source));
+    const resolvedHandler = path.resolve(entry.hook.handlerPath);
+    if (!isContainedPath(pluginBaseDir, resolvedHandler) && resolvedHandler !== pluginBaseDir) {
+      api.logger.warn?.(
+        `[hooks] ${entry.hook.name} handler path escapes plugin directory: ${entry.hook.handlerPath}`,
+      );
+      return null;
+    }
+    const url = pathToFileURL(resolvedHandler).href;
     const cacheBustedUrl = `${url}?t=${Date.now()}`;
     const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
     const exportName = entry.metadata?.export ?? "default";

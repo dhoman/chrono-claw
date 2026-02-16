@@ -1,5 +1,6 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
+import { redactOutboundPayload } from "openclaw/plugin-sdk";
 import { getMatrixRuntime } from "../../runtime.js";
 import { sendMessageMatrix } from "../send.js";
 
@@ -31,7 +32,7 @@ export async function deliverMatrixReplies(params: {
   const chunkLimit = Math.min(params.textLimit, 4000);
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "matrix", params.accountId);
   let hasReplied = false;
-  for (const reply of params.replies) {
+  for (const reply of params.replies.map(redactOutboundPayload)) {
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {

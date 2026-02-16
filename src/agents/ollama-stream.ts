@@ -9,6 +9,7 @@ import type {
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 
 export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
 
@@ -328,13 +329,22 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const response = await fetch(chatUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
+        const guarded = await fetchWithSsrFGuard({
+          url: chatUrl,
+          init: {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          },
           signal: options?.signal,
+          policy: { allowPrivateNetwork: true },
+          auditContext: "ollama-chat",
         });
+        let release: (() => Promise<void>) | undefined = guarded.release;
+        try {
+          const response = guarded.response;
 
+<<<<<<< HEAD
         if (!response.ok) {
           const errorText = await response.text().catch(() => "unknown error");
           throw new Error(`Ollama API error ${response.status}: ${errorText}`);
@@ -355,43 +365,66 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
           } else if (chunk.message?.reasoning) {
             // Qwen 3 reasoning mode: content may be empty, output in reasoning
             accumulatedContent += chunk.message.reasoning;
+=======
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => "unknown error");
+            throw new Error(`Ollama API error ${response.status}: ${errorText}`);
+>>>>>>> 89c9642c9 (phase 6)
           }
 
-          // Ollama sends tool_calls in intermediate (done:false) chunks,
-          // NOT in the final done:true chunk. Collect from all chunks.
-          if (chunk.message?.tool_calls) {
-            accumulatedToolCalls.push(...chunk.message.tool_calls);
+          if (!response.body) {
+            throw new Error("Ollama API returned empty response body");
           }
 
-          if (chunk.done) {
-            finalResponse = chunk;
-            break;
+          const reader = response.body.getReader();
+          let accumulatedContent = "";
+          const accumulatedToolCalls: OllamaToolCall[] = [];
+          let finalResponse: OllamaChatResponse | undefined;
+
+          for await (const chunk of parseNdjsonStream(reader)) {
+            if (chunk.message?.content) {
+              accumulatedContent += chunk.message.content;
+            }
+
+            // Ollama sends tool_calls in intermediate (done:false) chunks,
+            // NOT in the final done:true chunk. Collect from all chunks.
+            if (chunk.message?.tool_calls) {
+              accumulatedToolCalls.push(...chunk.message.tool_calls);
+            }
+
+            if (chunk.done) {
+              finalResponse = chunk;
+              break;
+            }
           }
+
+          if (!finalResponse) {
+            throw new Error("Ollama API stream ended without a final response");
+          }
+
+          finalResponse.message.content = accumulatedContent;
+          if (accumulatedToolCalls.length > 0) {
+            finalResponse.message.tool_calls = accumulatedToolCalls;
+          }
+
+          const assistantMessage = buildAssistantMessage(finalResponse, {
+            api: model.api,
+            provider: model.provider,
+            id: model.id,
+          });
+
+          const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
+            assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";
+
+          stream.push({
+            type: "done",
+            reason,
+            message: assistantMessage,
+          });
+        } finally {
+          await release?.();
+          release = undefined;
         }
-
-        if (!finalResponse) {
-          throw new Error("Ollama API stream ended without a final response");
-        }
-
-        finalResponse.message.content = accumulatedContent;
-        if (accumulatedToolCalls.length > 0) {
-          finalResponse.message.tool_calls = accumulatedToolCalls;
-        }
-
-        const assistantMessage = buildAssistantMessage(finalResponse, {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
-        });
-
-        const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-          assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";
-
-        stream.push({
-          type: "done",
-          reason,
-          message: assistantMessage,
-        });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         stream.push({

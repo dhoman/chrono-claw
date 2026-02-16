@@ -2,6 +2,7 @@ import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chun
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
+import { redactOutboundPayload } from "../../infra/outbound/payloads.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { markdownToWhatsApp } from "../../markdown/whatsapp.js";
 import { sleep } from "../../utils.js";
@@ -27,7 +28,8 @@ export async function deliverWebReply(params: {
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
 }) {
-  const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
+  const replyResult = redactOutboundPayload(params.replyResult);
+  const { msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";

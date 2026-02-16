@@ -2,6 +2,7 @@ import { chunkTextWithMode, resolveChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { redactOutboundPayload } from "../../infra/outbound/payloads.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { createIMessageRpcClient } from "../client.js";
@@ -31,7 +32,7 @@ export async function deliverReplies(params: {
     accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
-  for (const payload of replies) {
+  for (const payload of replies.map(redactOutboundPayload)) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const text = convertMarkdownTables(rawText, tableMode);

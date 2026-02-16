@@ -5,6 +5,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { redactOutboundPayload } from "../../infra/outbound/payloads.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack } from "../send.js";
 
@@ -17,7 +18,7 @@ export async function deliverReplies(params: {
   textLimit: number;
   replyThreadTs?: string;
 }) {
-  for (const payload of params.replies) {
+  for (const payload of params.replies.map(redactOutboundPayload)) {
     const threadTs = payload.replyToId ?? params.replyThreadTs;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
