@@ -8,7 +8,7 @@ echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running onboarding E2E..."
-docker run --rm -t "$IMAGE_NAME" bash -lc '
+docker run --rm -t -e NO_COLOR=1 "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 	  trap "" PIPE
 	  export TERM=xterm-256color

@@ -11,4 +11,4 @@ docker build \
   "$ROOT_DIR"
 
 echo "==> Run cleanup smoke test"
-docker run --rm -t "$IMAGE_NAME"
+docker run --rm -t -e NO_COLOR=1 "$IMAGE_NAME"

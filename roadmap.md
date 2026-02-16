@@ -86,6 +86,12 @@ Relevant files:
 pnpm build && pnpm vitest run --config vitest.e2e.config.ts test/security/security-harness.e2e.test.ts
 ```
 
+**Known weaknesses** (identified in post-Phase-5 audit):
+
+- Config matrix axes (`TOOL_PROFILES`, `EXEC_APPROVAL_MODES`) are defined but `crossMatrix()` is never called in the harness tests. Tests only verify the gateway boots with different configs — they do not verify that `sandbox=all` actually constrains tool execution vs `sandbox=off`.
+- No test of token replay, expired tokens, or malformed auth tokens.
+- These gaps are addressed in Phase 9.
+
 Relevant files:
 
 - test/security/harness.ts
@@ -115,6 +121,12 @@ Relevant files:
 - `src/agents/sandbox-paths.test.ts` — 12 tests covering: path traversal (`../../etc/shadow`, deep traversal), absolute paths outside root (`/home/user/.ssh/id_rsa`, `/etc/shadow`), `~` expansion outside root (`~/.env`, `~/.ssh/id_rsa`), embedded `..` after valid prefix, valid paths within root, root-itself resolution, and `assertSandboxPath()` symlink traversal rejection.
 
 **Verification**: All 23 new tests pass. Full suite (680 files, 4759 tests) passes with zero regressions.
+
+**Known weaknesses** (identified in post-Phase-5 audit):
+
+- **Baseline trivially defeatable**: `GENERATE_BASELINE=1` lets any developer silently reset the security floor. Deleting `baseline-audit.json` also passes (auto-generates on first run). Compares finding IDs only, not content/severity/details. No directional guard — doesn't assert findings can only decrease. Addressed in Phase 8.
+- **DLP applied to `text` field only**: `redactSensitiveText` at `src/infra/outbound/payloads.ts:54` does not redact media URLs (may contain tokens in query params), `channelData` (freeform field with button labels, embed text), or captions. Addressed in Phase 6.
+- **Telegram bot delivery bypasses DLP entirely**: `src/telegram/bot/delivery.ts` → `deliverReplies()` sends outbound messages via `bot.api.sendMessage` without going through `normalizeReplyPayloadsForDelivery()`. If an LLM echoes a secret, the Telegram bot path sends it unredacted. This is the highest-priority fix (Phase 6).
 
 Relevant files:
 
@@ -163,6 +175,13 @@ Relevant files:
 
 **Verification**: All 24 new tests pass (14 HMAC unit + 8 trust-tier + 2 baseline audit). Full gateway suite (372 tests) passes with zero regressions. Build compiles cleanly.
 
+**Known weaknesses** (identified in post-Phase-5 audit):
+
+- Reader agent tool policy test calls `filterToolsByPolicy()` in isolation — does not verify policy is enforced at runtime during agent execution.
+- No test of escalation paths (can a reader-tier session escalate to coding-tier?), cross-tier interactions, or `sessions_spawn` inheriting parent tier restrictions.
+- HMAC tests only cover `hmac-sha256`. No timing-attack resistance validation.
+- These gaps are addressed in Phase 9.
+
 Relevant files:
 
 - src/gateway/webhook-hmac.ts, src/gateway/webhook-hmac.test.ts
@@ -208,6 +227,18 @@ Relevant files:
 - `docs/automation/hooks.md` — added "Production: Version Pinning" section and cross-reference to the security model doc in the See Also section.
 
 **Verification**: All 50 new tests pass (18 module path + 4 loader security + 5 archive security + 5 scanner CI + 13 existing loader + 5 existing archive = 50 total across modified files). `pnpm scan:skills` exits 0 on the real `skills/` directory. Full test suite passes with zero regressions.
+
+**Known weaknesses** (identified in post-Phase-5 audit):
+
+- **Skill scanner trivially bypassable**: All 8 rules use static regex matching. Known bypasses:
+  - Dynamic `import()` not detected at all (`await import("child_process")` evades every rule).
+  - `Function` constructor aliasing (`const F = Function; F("code")()`).
+  - Computed `require()` paths (`require("child" + "_process")`).
+  - Bracket notation (`process["env"]`) bypasses `env-harvesting` rule.
+  - String concatenation (`"ev"+"al"`) bypasses everything.
+  - Only 5 CI tests cover 2 of the 8 rules; no evasion/negative tests.
+  - Addressed in Phase 7.
+- **Plugin-hooks loader path bypass**: `src/hooks/plugin-hooks.ts:44` and `src/gateway/hooks-mapping.ts:349` use `import()` with NO path containment — unlike the legacy loader at `src/hooks/loader.ts` which has proper checks. A plugin with an arbitrary `handlerPath` can load any module on the filesystem. Addressed in Phase 6.
 
 Relevant files:
 
@@ -262,6 +293,13 @@ Relevant files:
 
 **Verification**: All 118 unit tests pass. All 133 security unit tests pass together (118 injection + 2 baseline + 8 trust-tier + 5 scanner CI). E2E tests require `pnpm build` first. Zero regressions.
 
+**Known weaknesses** (identified in post-Phase-5 audit):
+
+- **E2E tests are status-code-only**: `injection-corpus.e2e.test.ts` ignores all corpus metadata (`expectations`, `shouldDetect`, `embeddedSecrets`, `ssrfTargets`, `targetTools`). It only asserts HTTP 200 and no crash. `detectSuspiciousPatterns()` is never called. Content wrapping, tool denial, DLP redaction, and SSRF blocking are never verified at E2E level.
+- **Half the corpus is untested in E2E**: `API_INGRESS_INJECTIONS`, `HOOK_INGRESS_INJECTIONS`, `WEBCHAT_INGRESS_INJECTIONS`, and `CLI_INGRESS_INJECTIONS` are defined in payloads but never imported by the E2E test.
+- **Unit tests (injection-detection.test.ts) are thorough**: The 118 unit tests DO exercise detection, wrapping, DLP, SSRF, and tool policy — but only as isolated function calls, not through the actual gateway pipeline.
+- These gaps are addressed in Phase 9.
+
 Relevant files:
 
 - test/security/injection-corpus/types.ts, test/security/injection-corpus/payloads.ts, test/security/injection-corpus/matrix.ts
@@ -275,100 +313,373 @@ Relevant files:
 
 ### Phase 5: Docker/Podman Security Regression Suite
 
-**Status**: Extensive Docker E2E infrastructure exists for functional testing. No dedicated security regression suite that verifies sandbox isolation under attack scenarios.
+**Status**: DONE.
 
-**What already exists**:
+**What was delivered**:
 
-- `test/gateway.multi.e2e.test.ts` — multi-instance gateway E2E
-- `scripts/e2e/` — 7+ Docker test scripts
-- `pnpm test:docker:all` — orchestrates Docker test suite
-- Podman rootless support (`setup-podman.sh`, Quadlet units)
-- Sandbox auto-pruning (idle 24h, max age 7d)
+**5a — Docker/Podman security regression orchestrator:**
 
-Goals:
+- `scripts/e2e/security-regression-docker.sh` — 4-phase regression orchestrator that:
+  1. Auto-detects container runtime (Docker or Podman).
+  2. Builds the E2E image from `scripts/e2e/Dockerfile`.
+  3. Creates an `--internal` Docker network (blocks external egress including cloud metadata endpoints).
+  4. Starts a gateway container with production-grade hardening: `--security-opt no-new-privileges`, `--cap-drop ALL`, `--read-only` filesystem, tmpfs overlays for `/tmp` and `/home/node`, no Docker socket mount, no privileged mode.
+  5. Gateway runs with `sandbox: { mode: "all" }`, `tools: { profile: "coding" }`, token auth.
+  6. Phase 1: Runs security unit tests inside Docker (injection detection, skill scanner CI, baseline audit).
+  7. Phase 2: Runs sandbox isolation tests (host path denial, Docker socket denial, metadata endpoint blocking, non-root enforcement, read-only filesystem).
+  8. Phase 3: Runs E2E injection corpus against the containerized gateway from a separate test container on the same network.
+  9. Phase 4: Verifies gateway remained healthy (no crash) throughout all tests.
+- `package.json` — added `"test:docker:security"` script, added to `test:docker:all` chain.
 
-- Verify that sandboxed execution actually prevents host access and secret leakage.
-- Run the injection corpus (Phase 4) inside containerized gateways.
-- Ensure regressions are caught before release.
+**5b — Docker sandbox isolation tests (20 tests):**
 
-Key actions:
+- `test/security/docker-sandbox-isolation.test.ts` — 20 tests across 5 suites, designed to run inside Docker (skip gracefully outside via `OPENCLAW_DOCKER_SECURITY_TEST=1` env var):
+  - **Host filesystem isolation** (4 tests): `/etc/shadow` unreadable, host `.env` files inaccessible, `~/.openclaw/credentials/` not mounted, `auth-profiles.json` not present.
+  - **Docker socket isolation** (2 tests): `/var/run/docker.sock` not mounted, TCP connection to socket path fails.
+  - **Network isolation** (3 tests): AWS metadata endpoint (`169.254.169.254`) unreachable, Google Cloud metadata unreachable, no unexpected services on common ports (Redis, MySQL, PostgreSQL, Elasticsearch, MongoDB).
+  - **Container hardening** (6 tests): runs as non-root (uid != 0), runs as `node` user, `NoNewPrivs` flag set, root filesystem is read-only, `/app` is read-only, `/tmp` is writable (tmpfs).
+  - **Secret leakage prevention** (4 tests): no `.env` in `/app`, no `credentials/` in `/app`, no sensitive env vars (API keys, tokens, database URLs), no `sk-*` patterns in process environment.
 
-1. Create a `scripts/e2e/security-regression-docker.sh` that boots a gateway in Docker with `sandbox=all` and runs the injection corpus against it.
-2. Add scenarios where the sandboxed agent attempts to read host `.env`, `~/.openclaw/credentials/`, and `auth-profiles.json` — assert denial.
-3. Add scenarios where the sandboxed agent attempts to escape the container (mount host paths, access Docker socket, network to metadata endpoint) — assert denial.
-4. Support both Docker and Podman runtimes.
-5. Add to CI as a mandatory pre-release gate (`pnpm test:docker:security`).
+**5c — Docker E2E injection corpus tests (30+ tests):**
 
-Deliverables:
+- `test/security/docker-injection-e2e.test.ts` — E2E tests that run from a test container against the gateway container:
+  - **Auth enforcement** (6 tests): one per injection category rejected without auth token (401/403).
+  - **Authenticated handling** (12 tests): two per category accepted with valid token (200).
+  - **Gateway stability** (6 tests): one per category, verifies gateway processes payload and still responds to follow-up health check.
+  - **Full corpus pass-through** (1 test): all 33+ injection payloads sent with auth, all return 200 (no 5xx), sanity check ≥20 payloads tested.
+  - **Sandbox mode verification** (1 test): confirms gateway is alive and responding with sandbox=all config.
+  - Tests connect to gateway via container hostname (Docker DNS), using env vars `SEC_GW_HOST`, `SEC_GW_PORT`, `SEC_GW_TOKEN`, `SEC_HOOK_TOKEN` set by the orchestrator script.
+  - Skip gracefully when not in Docker (no env vars = `describe.skipIf`).
 
-1. `scripts/e2e/security-regression-docker.sh` script.
-2. `pnpm test:docker:security` npm script.
-3. CI integration as a mandatory check.
+**5d — CI integration:**
 
-Minimum viable test suite:
+- `.github/workflows/ci.yml` — added `docker-security` job that runs after `check`, skipped for docs-only changes. Runs `bash scripts/e2e/security-regression-docker.sh` as a mandatory pre-release gate.
 
-1. Regression suite runs entirely inside Docker (or Podman).
-2. Sandbox escape attempts are blocked.
-3. Injection corpus passes inside the container.
+**5e — Closed-box E2E with real LLMs and mock channel receiver (Phase 5 of the Docker script):**
 
-Definition of done:
+- `test/security/mock-telegram-receiver.mjs` — mock Telegram API server:
+  - HTTPS on port 443 with self-signed cert (CN=api.telegram.org). Handles grammy lifecycle: `getMe`, `getUpdates` (returns empty), `sendMessage` (captures payload), catch-all for other bot API calls.
+  - HTTP on port 9100: inspection API (`GET /health`, `GET /captured`, `DELETE /captured`) for test assertions.
+- `test/security/docker-closed-box-e2e.test.ts` — Vitest tests for full pipeline verification:
+  - **Pipeline completion**: benign message flows through webhook → real LLM → Telegram channel delivery → mock receiver captures it.
+  - **DLP redaction**: sends messages containing `sk-proj-*` and `ghp_*` tokens, asserts they don't appear in captured outbound text.
+  - **Injection corpus by category**: representative payloads from all 6 categories sent through the full pipeline. Asserts pipeline completes, gateway stays healthy, and dangerous commands aren't echoed verbatim.
+  - **Gateway stability**: verifies gateway still accepts requests after all payloads.
+  - 120s poll timeout for real LLM latency.
+  - Skips when `SEC_CB_*` env vars aren't set.
+- `scripts/e2e/security-regression-docker.sh` — Phase 5 added to the orchestrator:
+  - Skipped when no `SEC_LIVE_MODELS` or API keys configured (Phases 1-4 still pass in CI without secrets).
+  - Per-model iteration: for each model in `SEC_LIVE_MODELS`, creates a non-internal Docker network (internet access for LLM APIs), starts mock Telegram receiver, starts gateway with channels enabled + real model + `--add-host api.telegram.org:$MOCK_IP`, runs closed-box tests, cleans up.
+  - Model provider resolution: `anthropic/*` → Anthropic API, `openai/*` → OpenAI API, `openrouter/*` → OpenRouter API.
 
-1. Docker security regression suite is mandatory in CI.
-2. Regressions in tool policy, sandbox, or DLP fail the build.
+Usage (one-liners):
+
+```bash
+# Phases 1-4 only (no API keys needed):
+pnpm test:docker:security
+
+# With Phase 5 (Anthropic):
+SEC_LIVE_MODELS=anthropic/claude-sonnet-4-5-20250929 ANTHROPIC_API_KEY=sk-ant-... pnpm test:docker:security
+
+# Multiple models:
+SEC_LIVE_MODELS=anthropic/claude-sonnet-4-5-20250929,openai/gpt-4o ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... pnpm test:docker:security
+```
+
+**Verification**: Docker security regression script executes all 5 phases. Phase 5 is the first test that verifies actual outbound content (not just HTTP status codes) by capturing what the gateway sends to the channel. Both `docker-sandbox-isolation.test.ts`, `docker-injection-e2e.test.ts`, and `docker-closed-box-e2e.test.ts` skip gracefully in non-Docker environments. Zero regressions in the full test suite.
+
+**Known weaknesses** (identified in post-Phase-5 audit):
+
+- Docker Phases 1-3 (inside the script) inherit the status-code-only problem from Phase 4's E2E test. Only the closed-box Phase 5 verifies outbound content.
+- Closed-box tests require real API keys and cost real money — cannot run in CI without secrets configured.
 
 Relevant files:
 
-- Dockerfile, Dockerfile.sandbox, docker-compose.yml
-- setup-podman.sh
-- test/gateway.multi.e2e.test.ts
-- scripts/e2e/
-- src/agents/sandbox/constants.ts
-- docs/install/docker.md, docs/install/podman.md
-- docs/gateway/sandboxing.md
+- scripts/e2e/security-regression-docker.sh
+- test/security/docker-sandbox-isolation.test.ts
+- test/security/docker-injection-e2e.test.ts
+- test/security/docker-closed-box-e2e.test.ts
+- test/security/mock-telegram-receiver.mjs
+- package.json
+- .github/workflows/ci.yml
 
-### Phase 6: Monitoring, Drift Detection, and Alerting
+### Phase 6: Fix Active Bypass Paths
 
-**Status**: `openclaw security audit` exists. No formal drift detection or structured denial logging is in CI.
+**Status**: NOT STARTED.
+
+**Priority**: CRITICAL. These are active vulnerability classes, not theoretical gaps.
+
+**Rationale**: The post-Phase-5 audit found that several production code paths bypass the security controls that Phases 1-5 test. Fixing these is more urgent than monitoring/drift detection because the bypasses undermine the guarantees the earlier phases claim to provide.
+
+Goals:
+
+- Close all known DLP bypass paths so secrets cannot leak through any outbound channel.
+- Centralize outbound HTTP so SSRF protection cannot be circumvented.
+- Apply consistent path containment to all module loaders.
+
+Key actions:
+
+**6a — Telegram bot DLP bypass (highest priority):**
+
+`src/telegram/bot/delivery.ts` → `deliverReplies()` sends outbound messages via `bot.api.sendMessage` without going through `normalizeReplyPayloadsForDelivery()`. This means the Telegram bot reply path (the most common path for interactive chat) bypasses DLP redaction entirely. Fix: apply `redactSensitiveText()` to all outbound text in `deliverReplies()`, or route through the existing normalization pipeline.
+
+**6b — Expand DLP to non-text fields:**
+
+`src/infra/outbound/payloads.ts:54` only redacts `parsed.text`. Media URLs (may contain tokens in query params), `channelData` (freeform field with button labels, embed text), and captions are not redacted. Fix: apply `redactSensitiveText()` to `mediaUrl`, `mediaUrls`, and string values in `channelData`.
+
+**6c — Centralize outbound fetch (SSRF bypass):**
+
+Only 4 files use `fetchWithSsrFGuard`. Dozens of bare `fetch()` calls bypass SSRF protection:
+
+- `src/agents/tools/web-fetch.ts:326` — Firecrawl relay sends user-provided URLs to an external service. If Firecrawl is self-hosted, this scans internal networks.
+- `src/agents/ollama-stream.ts:326` — Ollama URL from user config, no SSRF check.
+- `src/agents/models-config.providers.ts:171` — Model provider URL from config.
+- `src/cli/nodes-camera.ts:90` — URL origin unclear.
+  Fix: audit all bare `fetch()` calls; wrap user-controllable URLs through `fetchWithSsrFGuard`; add lint rule or test that detects new bare `fetch()` in security-sensitive paths.
+
+**6d — Plugin-hooks loader path containment:**
+
+`src/hooks/plugin-hooks.ts:44` and `src/gateway/hooks-mapping.ts:349` use `import()` with NO path containment, unlike the legacy loader at `src/hooks/loader.ts:119-137` which validates paths. A plugin with an arbitrary `handlerPath` can load any module on the filesystem. Fix: apply the same `path.relative` + traversal check from `loader.ts` to both paths.
+
+**6e — Restrict `process.env` passthrough to plugins:**
+
+`src/plugins/config-state.ts:114,152` and `src/plugins/tools.ts:51` pass the full `process.env` to plugin code as a default parameter. `src/channels/plugins/catalog.ts:95` reads arbitrary env vars via dynamic key. Fix: filter env vars to only declared needs (from plugin manifest `requires.env`) before passing to plugin contexts.
+
+Deliverables:
+
+1. `deliverReplies()` applies DLP redaction.
+2. `normalizeReplyPayloadsForDelivery()` redacts media URLs and channelData strings.
+3. All user-controllable `fetch()` calls go through SSRF guard (or are documented as safe with hardcoded domains).
+4. Plugin-hooks and hooks-mapping loaders validate module paths.
+5. Plugin env access filtered to declared needs.
+
+Minimum viable test suite:
+
+1. Test that Telegram bot delivery path redacts `sk-*` tokens (regression test for 6a).
+2. Test that media URLs with tokens are redacted (6b).
+3. Test that Firecrawl path with private IP URL is blocked or guarded (6c).
+4. Test that plugin-hooks loader rejects absolute/traversal paths (6d).
+5. Test that plugins don't receive undeclared env vars (6e).
+
+Definition of done:
+
+1. No outbound channel path can send unredacted secrets.
+2. No user-controllable URL can bypass SSRF protection.
+3. No module loader can escape its workspace.
+
+Relevant files:
+
+- src/telegram/bot/delivery.ts
+- src/infra/outbound/payloads.ts
+- src/agents/tools/web-fetch.ts
+- src/agents/ollama-stream.ts
+- src/agents/models-config.providers.ts
+- src/hooks/plugin-hooks.ts
+- src/gateway/hooks-mapping.ts
+- src/plugins/config-state.ts, src/plugins/tools.ts
+- src/channels/plugins/catalog.ts
+- src/infra/net/fetch-guard.ts, src/infra/net/ssrf.ts
+
+### Phase 7: Skill Scanner Hardening
+
+**Status**: NOT STARTED.
+
+**Priority**: HIGH. The current scanner uses static regex matching that is trivially bypassable by standard supply-chain attack patterns (e.g., event-stream, ua-parser-js style).
+
+Goals:
+
+- Catch real supply-chain threats, not just toy patterns.
+- Expand CI test coverage to validate all rules and known evasion techniques.
+
+Key actions:
+
+**7a — Add detection rules for known evasion patterns:**
+
+- Dynamic `import()`: `await import("child_process")` evades every existing rule.
+- `Function` constructor aliasing: `const F = Function; F("code")()`, `globalThis["Function"]("code")()`, `Reflect.construct(Function, ["code"])`.
+- Computed `require()`: `require("child" + "_process")`, `require(variable)`.
+- Bracket notation: `process["env"]`, `global["eval"]`.
+- String concatenation: `"ev"+"al"`, template literals with embedded calls.
+- `vm` module: `vm.runInNewContext`, `vm.Script`, `vm.compileFunction`.
+- Non-JS execution: `.sh` files with executable permissions, `postinstall` in `package.json`.
+
+**7b — Consider AST-based analysis:**
+
+Regex-only scanning has a fundamental ceiling. Evaluate using a lightweight AST parser (e.g., `acorn` or TypeScript compiler API) to detect:
+
+- Dynamic imports with non-literal arguments.
+- Computed property access on dangerous globals.
+- Indirect calls through variable aliasing.
+  This is a larger lift but dramatically raises the bar for evasion.
+
+**7c — Expand CI test coverage:**
+
+Current: 5 tests covering 2 of 8 rules. Target: 25+ tests covering all rules plus evasion attempts. Add negative tests: known bypass patterns that SHOULD be caught, payloads that currently evade detection.
+
+Deliverables:
+
+1. At minimum 10 new scanner rules for evasion patterns.
+2. Evaluation document for AST-based scanning (go/no-go decision).
+3. 25+ scanner CI tests covering all rules and known bypasses.
+
+Minimum viable test suite:
+
+1. `await import("child_process")` detected.
+2. `Function` aliasing detected.
+3. `process["env"]` detected.
+4. `require(variable)` detected.
+5. String concatenation evasion detected.
+6. All 8 original rules have at least 2 tests each.
+
+Definition of done:
+
+1. All known evasion patterns from the audit are detected or documented as accepted risk with mitigation.
+2. Scanner CI tests cover all rules with both positive and negative cases.
+3. If AST approach approved, initial implementation for top 3 evasion patterns.
+
+Relevant files:
+
+- src/security/skill-scanner.ts
+- test/security/skill-scanner-ci.test.ts
+- scripts/scan-skills.ts
+
+### Phase 8: Monitoring, Drift Detection, and Baseline Hardening
+
+**Status**: NOT STARTED.
+
+**Priority**: MEDIUM. Important for ongoing regression prevention, but less urgent than fixing active bypass paths (Phase 6) and scanner bypasses (Phase 7).
 
 Goals:
 
 - Detect regressions or accidental privilege expansion before release.
+- Harden the baseline audit so it cannot be silently circumvented.
 - Provide ongoing visibility into denied tool attempts and policy violations.
 
 Key actions:
 
-1. Add a CI step that runs `openclaw security audit --json` and compares against the committed baseline (Phase 1). Fail on any new finding with severity >= warn.
-2. Add a "policy drift" test: snapshot the current tool allowlist for each agent, commit it, and fail if any allowlist expands without an explicit approval comment in the diff.
-3. Add structured logging for tool denial events (`src/agents/tool-policy-pipeline.ts`): emit a JSON log line with `{event: "tool_denied", tool, agent, session, reason}` that can be aggregated.
-4. Document an alerting pattern: how to pipe denial logs to a monitoring system (e.g., webhook to Slack/Discord on repeated denials from the same session).
+**8a — Harden baseline audit:**
+
+- Remove `GENERATE_BASELINE=1` escape hatch from CI (block via CI env or check). Allow local regeneration only.
+- Add directional guard: new baseline must have same or fewer findings. An update that adds findings fails unless accompanied by an explicit justification comment.
+- Compare finding content and severity, not just IDs. A finding that gets worse but keeps the same ID should fail.
+- Prevent silent reset: if `baseline-audit.json` is deleted, CI should fail (not auto-generate).
+
+**8b — CI drift detection:**
+
+- Add a CI step that runs `openclaw security audit --json` and compares against baseline. Fail on any new finding with severity >= warn.
+- Add a "policy drift" test: snapshot the current tool allowlist for each agent, commit it, and fail if any allowlist expands without an explicit approval comment.
+
+**8c — Structured denial logging:**
+
+- Emit structured JSON log lines for tool denial events (`src/agents/tool-policy-pipeline.ts`): `{event: "tool_denied", tool, agent, session, reason}`.
+- Emit structured log for SSRF blocks, DLP redactions, and injection pattern detections.
+
+**8d — Alerting documentation:**
+
+- Document how to pipe denial/block logs to monitoring (webhook to Slack/Discord on repeated denials from the same session).
 
 Deliverables:
 
-1. CI drift detection step.
-2. Tool allowlist snapshot + regression test.
-3. Structured denial logging.
-4. Alerting documentation.
+1. Hardened baseline audit (no silent resets, directional guard, content comparison).
+2. CI drift detection step.
+3. Tool allowlist snapshot + regression test.
+4. Structured denial/block logging.
+5. Alerting documentation.
 
 Minimum viable test suite:
 
-1. Policy drift test fails when allowlists expand unexpectedly.
-2. Tool denial events are logged in structured JSON format.
-3. Audit baseline regression catches new findings.
+1. Baseline test fails when `baseline-audit.json` is deleted (no auto-generate in CI).
+2. Baseline test fails when a finding severity increases.
+3. Policy drift test fails when allowlists expand.
+4. Tool denial events are logged in structured JSON format.
 
 Definition of done:
 
 1. Drift detection is enforced in CI.
-2. Denial events are structured and parseable.
-3. Alerting pattern is documented.
+2. Baseline cannot be silently circumvented.
+3. Denial events are structured and parseable.
+4. Alerting pattern is documented.
 
 Relevant files:
 
+- test/security/baseline-audit.test.ts, test/security/baseline-audit.json
 - src/cli/security-cli.ts
 - src/agents/tool-policy-pipeline.ts
 - src/agents/tool-policy.ts
 - src/logging/redact.ts
 - docs/gateway/security/index.md
 - docs/gateway/logging.md
+
+### Phase 9: Test Depth — Make Existing Tests Actually Test Security
+
+**Status**: NOT STARTED.
+
+**Priority**: MEDIUM. The test infrastructure from Phases 0-5 exists but many tests verify plumbing (HTTP status codes, gateway boot) rather than security behavior. This phase upgrades existing tests to verify the actual security guarantees.
+
+Goals:
+
+- E2E tests verify security expectations (detection, wrapping, DLP, SSRF blocking), not just HTTP 200.
+- Config matrix tests verify sandbox and tool policy constraints are enforced at runtime.
+- Trust-tier tests verify escalation prevention and runtime enforcement.
+- SSRF tests cover edge cases (IPv6-mapped-IPv4, `0.0.0.0`, protocol injection, DNS rebinding during redirects).
+
+Key actions:
+
+**9a — Upgrade injection corpus E2E tests:**
+
+`injection-corpus.e2e.test.ts` currently ignores all corpus metadata. Upgrade to:
+
+- Call `detectSuspiciousPatterns()` on payloads with `shouldDetect: true` and assert detection.
+- Verify `wrapExternalContent()` was applied for `content-wrapped` expectations.
+- Verify `redactSensitiveText()` for `secret-redacted` expectations using `embeddedSecrets` field.
+- Verify SSRF blocking for `ssrf-blocked` expectations using `ssrfTargets` field.
+- Import and test the additional ingress payloads (`API_INGRESS`, `HOOK_INGRESS`, `WEBCHAT_INGRESS`, `CLI_INGRESS`).
+
+**9b — Config matrix runtime enforcement:**
+
+`security-harness.e2e.test.ts` config matrix tests only check gateway boot. Upgrade to:
+
+- Use all three axes (`SANDBOX_MODES`, `TOOL_PROFILES`, `EXEC_APPROVAL_MODES`) via `crossMatrix()`.
+- For `sandbox=all`: verify that a tool invocation actually runs in a container (not on host).
+- For `tools: minimal`: verify that `exec` tool calls are blocked at runtime, not just in a static filter.
+- For `exec: deny`: verify that exec approval requests are rejected.
+
+**9c — Trust-tier runtime enforcement:**
+
+- Test that a reader-tier agent cannot escalate to coding-tier tools during execution.
+- Test that `sessions_spawn` from a restricted session inherits parent restrictions.
+- Test cross-tier isolation: a webhook-spawned agent cannot affect a higher-tier agent's session.
+
+**9d — SSRF edge-case coverage:**
+
+Expand `fetch-guard.ssrf.test.ts` from 4 tests to 15+:
+
+- `::ffff:127.0.0.1` (IPv6-mapped IPv4)
+- `0.0.0.0` and `[::]`
+- `file:///etc/passwd` and `data:` protocol rejection
+- DNS rebinding during redirect chain (first hop resolves to public IP, redirect resolves to private)
+- Double-URL-encoding attacks
+- CNAME chain to private IP
+
+Deliverables:
+
+1. Upgraded E2E tests that verify all corpus security expectations.
+2. Config matrix tests with runtime enforcement verification.
+3. Trust-tier escalation prevention tests.
+4. 15+ SSRF edge-case tests.
+
+Minimum viable test suite:
+
+1. At least one E2E test per security expectation type (`detection`, `content-wrapped`, `tool-denied`, `secret-redacted`, `ssrf-blocked`, `marker-sanitized`).
+2. Config matrix test that proves `sandbox=all` constrains execution vs `sandbox=off`.
+3. SSRF test for `::ffff:127.0.0.1`.
+4. Trust-tier test that proves escalation is blocked.
+
+Definition of done:
+
+1. E2E tests exercise all fields in the corpus metadata, not just HTTP status codes.
+2. Config matrix tests verify runtime behavior differences, not just boot success.
+3. SSRF protection is tested against all known bypass techniques.
+4. Trust-tier model is enforced and tested at runtime.
 
 ## Test Matrix (Ingress x Security Expectations)
 
@@ -509,18 +820,27 @@ Example:
 Phase 0 (Security Harness)
    │
    ├── Phase 1 (Baseline Snapshot)
-   │      │
-   │      └── Phase 6 (Drift Detection) ─── uses baseline from Phase 1
    │
    ├── Phase 2 (Trust Tiers + Webhook Auth)
    │
    ├── Phase 3 (Supply-Chain + Hook Hardening)
+   │      │
+   │      └── Phase 7 (Scanner Hardening) ─── fixes scanner bypasses from Phase 3
    │
    └── Phase 4 (Injection Corpus)
           │
-          └── Phase 5 (Docker Security Regression) ─── runs corpus from Phase 4
+          └── Phase 5 (Docker Regression + Closed-Box) ─── runs corpus from Phase 4
+                 │
+                 └── Phase 6 (Fix Active Bypasses) ─── fixes DLP/SSRF/loader bypasses found by Phase 5 audit
+                        │
+                        ├── Phase 8 (Drift Detection) ─── uses hardened baseline from Phase 1 + fixes from Phase 6
+                        │
+                        └── Phase 9 (Test Depth) ─── upgrades tests from Phases 0-5 to verify actual security behavior
 ```
 
 Phases 1-4 can run in parallel once Phase 0 is complete.
 Phase 5 depends on Phase 4 (injection corpus).
-Phase 6 depends on Phase 1 (baseline snapshot).
+Phase 6 is the next critical step — fixes active vulnerability classes found during the Phase 5 audit.
+Phase 7 can run in parallel with Phase 6 (independent: scanner rules vs runtime bypasses).
+Phase 8 depends on Phase 6 (baseline hardening is more effective after bypass paths are closed).
+Phase 9 depends on Phase 6 (tests should verify the fixed behavior, not the broken behavior).
