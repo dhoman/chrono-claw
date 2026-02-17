@@ -13,7 +13,7 @@
 
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
@@ -120,7 +120,7 @@ const httpsServer = createHttpsServer({ key: tlsKey, cert: tlsCert }, async (req
       const body = method === "POST" ? await readBody(req) : {};
       const entry = {
         chat_id: body.chat_id ?? null,
-        text: typeof body.text === "string" ? body.text : String(body.text ?? ""),
+        text: typeof body.text === "string" ? body.text : JSON.stringify(body.text ?? ""),
         parse_mode: typeof body.parse_mode === "string" ? body.parse_mode : undefined,
         ts: new Date().toISOString(),
       };

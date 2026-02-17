@@ -344,32 +344,9 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
         try {
           const response = guarded.response;
 
-<<<<<<< HEAD
-        if (!response.ok) {
-          const errorText = await response.text().catch(() => "unknown error");
-          throw new Error(`Ollama API error ${response.status}: ${errorText}`);
-        }
-
-        if (!response.body) {
-          throw new Error("Ollama API returned empty response body");
-        }
-
-        const reader = response.body.getReader();
-        let accumulatedContent = "";
-        const accumulatedToolCalls: OllamaToolCall[] = [];
-        let finalResponse: OllamaChatResponse | undefined;
-
-        for await (const chunk of parseNdjsonStream(reader)) {
-          if (chunk.message?.content) {
-            accumulatedContent += chunk.message.content;
-          } else if (chunk.message?.reasoning) {
-            // Qwen 3 reasoning mode: content may be empty, output in reasoning
-            accumulatedContent += chunk.message.reasoning;
-=======
           if (!response.ok) {
             const errorText = await response.text().catch(() => "unknown error");
             throw new Error(`Ollama API error ${response.status}: ${errorText}`);
->>>>>>> 89c9642c9 (phase 6)
           }
 
           if (!response.body) {
@@ -384,6 +361,9 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
           for await (const chunk of parseNdjsonStream(reader)) {
             if (chunk.message?.content) {
               accumulatedContent += chunk.message.content;
+            } else if (chunk.message?.reasoning) {
+              // Qwen 3 reasoning mode: content may be empty, output in reasoning
+              accumulatedContent += chunk.message.reasoning;
             }
 
             // Ollama sends tool_calls in intermediate (done:false) chunks,

@@ -6,13 +6,26 @@
  *  1. Unauthenticated injection payloads are rejected (401/403).
  *  2. Authenticated injection payloads are accepted but processed safely (200).
  *  3. Injection payloads with secrets are accepted (DLP applies at outbound).
+ *  4. Detection verification: detectSuspiciousPatterns flags detectable payloads.
+ *  5. Content-wrapping verification: wrapExternalContent applies boundaries.
+ *  6. DLP redaction verification: redactSensitiveText removes embedded secrets.
+ *  7. SSRF blocking verification: private IPs and blocked hostnames are rejected.
+ *  8. Tool-denied verification: filterToolsByPolicy blocks target tools.
  *
  * NOTE: These tests require `pnpm build` first:
  *   pnpm build && pnpm vitest run --config vitest.e2e.config.ts test/security/injection-corpus.e2e.test.ts
  */
 
 import { afterAll, describe, expect, it } from "vitest";
+import type { AnyAgentTool } from "../../src/agents/pi-tools.types.js";
 import type { InjectionCorpusEntry } from "./injection-corpus/types.js";
+import { filterToolsByPolicy } from "../../src/agents/pi-tools.policy.js";
+import { isPrivateIpAddress, isBlockedHostname } from "../../src/infra/net/ssrf.js";
+import { redactSensitiveText } from "../../src/logging/redact.js";
+import {
+  detectSuspiciousPatterns,
+  wrapExternalContent,
+} from "../../src/security/external-content.js";
 import {
   type SecurityGatewayInstance,
   postWebhook,
@@ -26,12 +39,18 @@ import {
   EXFILTRATION_INJECTIONS,
   SSRF_INJECTIONS,
   TOOL_CONFUSION_INJECTIONS,
+  API_INGRESS_INJECTIONS,
+  HOOK_INGRESS_INJECTIONS,
+  WEBCHAT_INGRESS_INJECTIONS,
+  CLI_INGRESS_INJECTIONS,
+  ALL_INJECTION_PAYLOADS,
+  DETECTABLE_PAYLOADS,
 } from "./injection-corpus/payloads.js";
 
 const E2E_TIMEOUT_MS = 120_000;
 
 // ---------------------------------------------------------------------------
-// Helper to build webhook body from a corpus entry
+// Helpers
 // ---------------------------------------------------------------------------
 
 function buildWebhookBody(entry: InjectionCorpusEntry): Record<string, unknown> {
@@ -55,6 +74,44 @@ function buildWebhookBody(entry: InjectionCorpusEntry): Record<string, unknown> 
     mode: "now",
   };
 }
+
+function makeTool(name: string): AnyAgentTool {
+  return {
+    name,
+    description: `mock ${name}`,
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ result: "ok" }),
+  } as unknown as AnyAgentTool;
+}
+
+const ALL_TOOL_NAMES = [
+  "read",
+  "write",
+  "edit",
+  "exec",
+  "browser",
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
+  "cron",
+  "gateway",
+  "nodes",
+  "web_search",
+  "message",
+];
+
+const ALL_TOOLS = ALL_TOOL_NAMES.map(makeTool);
+
+const MINIMAL_POLICY = {
+  allow: ["read", "sessions_list", "sessions_history"],
+  deny: ["exec", "write", "browser", "nodes", "cron", "gateway"],
+};
+
+const READER_POLICY = {
+  allow: ["read", "sessions_list", "sessions_history"],
+  deny: ["exec", "write", "edit", "browser", "nodes", "cron", "gateway"],
+};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -159,4 +216,166 @@ describe("injection corpus E2E: gateway webhook", () => {
       },
     );
   });
+
+  // -- All-ingress coverage: include API, hook, webchat, CLI payloads ------
+
+  describe("all-ingress: additional ingress payloads accepted via webhook", () => {
+    const additionalIngress = [
+      ...API_INGRESS_INJECTIONS,
+      ...HOOK_INGRESS_INJECTIONS,
+      ...WEBCHAT_INGRESS_INJECTIONS,
+      ...CLI_INGRESS_INJECTIONS,
+    ];
+
+    it.each(additionalIngress.map((e) => [e.id, e]))(
+      "%s: additional ingress payload accepted with auth (200)",
+      async (_id, entry) => {
+        const body = buildWebhookBody(entry);
+        const res = await postWebhook(gw, "/hooks/wake", body, {
+          "Content-Type": "application/json",
+          "x-openclaw-token": gw.hookToken,
+        });
+        expect(res.status).toBe(200);
+      },
+    );
+
+    it("gateway remains healthy after all ingress payloads", async () => {
+      expect(gw.child.exitCode).toBeNull();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security function verification suites (no gateway needed)
+// ---------------------------------------------------------------------------
+
+describe("injection corpus E2E: detection verification", () => {
+  const detectablePayloads = ALL_INJECTION_PAYLOADS.filter((e) => e.shouldDetect);
+
+  it("has detectable payloads to test", () => {
+    expect(detectablePayloads.length).toBeGreaterThan(0);
+    expect(DETECTABLE_PAYLOADS.length).toBe(detectablePayloads.length);
+  });
+
+  it.each(detectablePayloads.map((e) => [e.id, e]))(
+    "%s: detectSuspiciousPatterns returns non-empty results",
+    (_id, entry) => {
+      const matches = detectSuspiciousPatterns(entry.payload);
+      expect(matches.length).toBeGreaterThan(0);
+    },
+  );
+
+  it("non-detectable payloads are correctly marked", () => {
+    const nonDetectable = ALL_INJECTION_PAYLOADS.filter((e) => !e.shouldDetect);
+    expect(nonDetectable.length).toBeGreaterThan(0);
+  });
+});
+
+describe("injection corpus E2E: content-wrapping verification", () => {
+  const wrappablePayloads = ALL_INJECTION_PAYLOADS.filter((e) =>
+    e.expectations.includes("content-wrapped"),
+  );
+
+  it("has content-wrapped payloads to test", () => {
+    expect(wrappablePayloads.length).toBeGreaterThan(0);
+  });
+
+  it.each(wrappablePayloads.map((e) => [e.id, e]))(
+    "%s: wrapExternalContent adds security boundaries",
+    (_id, entry) => {
+      const wrapped = wrapExternalContent(entry.payload, { source: "webhook" });
+      expect(wrapped).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+      expect(wrapped).toContain("<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>");
+      expect(wrapped).toContain("SECURITY NOTICE");
+    },
+  );
+
+  it("marker-sanitized payloads have homoglyphs neutralized", () => {
+    const markerPayloads = ALL_INJECTION_PAYLOADS.filter((e) =>
+      e.expectations.includes("marker-sanitized"),
+    );
+    expect(markerPayloads.length).toBeGreaterThan(0);
+
+    for (const entry of markerPayloads) {
+      const wrapped = wrapExternalContent(entry.payload, { source: "webhook" });
+      // The fullwidth Unicode markers should be sanitized to [[MARKER_SANITIZED]]
+      expect(wrapped).toContain("[[MARKER_SANITIZED]]");
+    }
+  });
+});
+
+describe("injection corpus E2E: DLP redaction verification", () => {
+  const dlpPayloads = ALL_INJECTION_PAYLOADS.filter(
+    (e) => e.expectations.includes("secret-redacted") && e.embeddedSecrets?.length,
+  );
+
+  it("has DLP payloads to test", () => {
+    expect(dlpPayloads.length).toBeGreaterThan(0);
+  });
+
+  it.each(dlpPayloads.map((e) => [e.id, e]))(
+    "%s: redactSensitiveText removes embedded secrets",
+    (_id, entry) => {
+      const redacted = redactSensitiveText(entry.payload);
+      for (const secret of entry.embeddedSecrets!) {
+        expect(redacted).not.toContain(secret);
+      }
+    },
+  );
+
+  it("clean text is not altered by DLP", () => {
+    const clean = "This is a normal message with no secrets.";
+    expect(redactSensitiveText(clean)).toBe(clean);
+  });
+});
+
+describe("injection corpus E2E: SSRF blocking verification", () => {
+  const ssrfPayloads = ALL_INJECTION_PAYLOADS.filter(
+    (e) => e.expectations.includes("ssrf-blocked") && e.ssrfTargets?.length,
+  );
+
+  it("has SSRF payloads to test", () => {
+    expect(ssrfPayloads.length).toBeGreaterThan(0);
+  });
+
+  it.each(ssrfPayloads.map((e) => [e.id, e]))("%s: SSRF targets are blocked", (_id, entry) => {
+    for (const target of entry.ssrfTargets!) {
+      const url = new URL(target);
+      const hostname = url.hostname;
+      const blocked = isPrivateIpAddress(hostname) || isBlockedHostname(hostname);
+      expect(blocked).toBe(true);
+    }
+  });
+});
+
+describe("injection corpus E2E: tool-denied verification", () => {
+  const toolDeniedPayloads = ALL_INJECTION_PAYLOADS.filter(
+    (e) => e.expectations.includes("tool-denied") && e.targetTools?.length,
+  );
+
+  it("has tool-denied payloads to test", () => {
+    expect(toolDeniedPayloads.length).toBeGreaterThan(0);
+  });
+
+  it.each(toolDeniedPayloads.map((e) => [e.id, e]))(
+    "%s: targetTools blocked under minimal policy",
+    (_id, entry) => {
+      const filtered = filterToolsByPolicy(ALL_TOOLS, MINIMAL_POLICY);
+      const allowedNames = new Set(filtered.map((t) => t.name));
+      for (const tool of entry.targetTools!) {
+        expect(allowedNames.has(tool)).toBe(false);
+      }
+    },
+  );
+
+  it.each(toolDeniedPayloads.map((e) => [e.id, e]))(
+    "%s: targetTools blocked under reader policy",
+    (_id, entry) => {
+      const filtered = filterToolsByPolicy(ALL_TOOLS, READER_POLICY);
+      const allowedNames = new Set(filtered.map((t) => t.name));
+      for (const tool of entry.targetTools!) {
+        expect(allowedNames.has(tool)).toBe(false);
+      }
+    },
+  );
 });

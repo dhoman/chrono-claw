@@ -18,7 +18,7 @@
  */
 
 import { request as httpRequest } from "node:http";
-import { describe, expect, it, beforeAll, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import {
   DIRECT_INJECTIONS,
   EXFILTRATION_INJECTIONS,
@@ -169,7 +169,7 @@ async function waitForCapture(
         `[cb-e2e] captured ${messages.length} message(s) after ${Date.now() - startMs}ms`,
       );
       for (const m of messages) {
-        console.log(`[cb-e2e] captured: chat_id=${m.chat_id} text=${m.text.slice(0, 150)}`);
+        console.log(`[cb-e2e] captured: chat_id=${String(m.chat_id)} text=${String(m.text).slice(0, 150)}`);
       }
       return messages;
     }

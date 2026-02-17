@@ -121,6 +121,8 @@
     "test:list-skipped-tests": "bash scripts/test-skips.sh",
     "test:live": "OPENCLAW_LIVE_TEST=1 CLAWDBOT_LIVE_TEST=1 vitest run --config vitest.live.config.ts",
     "test:macmini": "OPENCLAW_TEST_VM_FORKS=0 OPENCLAW_TEST_PROFILE=serial node scripts/test-parallel.mjs",
+    "test:security": "vitest run test/security/injection-detection.test.ts test/security/trust-tier.test.ts test/security/baseline-audit.test.ts test/security/skill-scanner-ci.test.ts src/infra/net/fetch-guard.ssrf.test.ts",
+    "test:security:e2e": "vitest run --config vitest.e2e.config.ts test/security/injection-corpus.e2e.test.ts test/security/security-harness.e2e.test.ts",
     "test:ui": "pnpm --dir ui test",
     "test:voicecall:closedloop": "vitest run extensions/voice-call/src/manager.test.ts extensions/voice-call/src/media-stream.test.ts src/plugins/voice-call.plugin.test.ts --maxWorkers=1",
     "test:watch": "vitest",
