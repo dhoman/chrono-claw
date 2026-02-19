@@ -1,0 +1,13 @@
+{
+  "summary": {
+    "critical": 0,
+    "warn": 1,
+    "info": 1
+  },
+  "findingIds": ["gateway.trusted_proxies_missing", "summary.attack_surface"],
+  "findingsBySeverity": {
+    "critical": [],
+    "warn": ["gateway.trusted_proxies_missing"],
+    "info": ["summary.attack_surface"]
+  }
+}

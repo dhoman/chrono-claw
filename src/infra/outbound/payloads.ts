@@ -1,6 +1,7 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { isRenderablePayload } from "../../auto-reply/reply/reply-payloads.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -50,7 +51,7 @@ export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): Rep
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
     const next: ReplyPayload = {
       ...payload,
-      text: parsed.text ?? "",
+      text: parsed.text ? redactSensitiveText(parsed.text) : "",
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,
