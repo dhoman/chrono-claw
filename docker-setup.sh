@@ -89,8 +89,7 @@ ensure_control_ui_allowed_origins() {
   local current_allowed_origins
   allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
   current_allowed_origins="$(
-    docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-      config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+    run_openclaw_config config get gateway.controlUi.allowedOrigins 2>/dev/null || true
   )"
   current_allowed_origins="${current_allowed_origins//$'\r'/}"
 
@@ -99,17 +98,22 @@ ensure_control_ui_allowed_origins() {
     return 0
   fi
 
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+  run_openclaw_config \
     config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json >/dev/null
   echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
 }
 
 sync_gateway_mode_and_bind() {
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.mode local >/dev/null
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
+  run_openclaw_config config set gateway.mode local >/dev/null
+  run_openclaw_config config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
+}
+
+run_openclaw_config() {
+  # Use the gateway service image with an overridden entrypoint so setup-time
+  # config writes never depend on the shared network namespace of openclaw-cli.
+  docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps --entrypoint node \
+    openclaw-gateway dist/index.js "$@"
 }
 
 contains_disallowed_chars() {
